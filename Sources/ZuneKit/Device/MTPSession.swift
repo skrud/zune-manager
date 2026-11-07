@@ -17,14 +17,16 @@ final class MTPSession {
 
     /// Opens the first attached device. Cached open: libmtp enumerates every object here
     /// (one by one, thanks to the fork's Zune flag), which takes about a minute.
-    static func open() throws -> MTPSession {
+    static func open(progress: @escaping (UInt64, UInt64) -> Void) throws -> MTPSession {
         _ = initialized
         var raw: UnsafeMutablePointer<LIBMTP_raw_device_t>?
         var count: Int32 = 0
         let status = LIBMTP_Detect_Raw_Devices(&raw, &count)
         defer { free(raw) }
         guard status == LIBMTP_ERROR_NONE, count > 0, let raw else { throw ZuneError.noDevice }
-        guard let device = LIBMTP_Open_Raw_Device(raw) else {
+        let box = Unmanaged.passRetained(ProgressBox(progress))
+        defer { box.release() }
+        guard let device = LIBMTP_Open_Raw_Device_With_Progress(raw, ProgressBox.callback, box.toOpaque()) else {
             throw ZuneError.libmtp(operation: "connect", message: "Could not open the Zune.")
         }
         return MTPSession(device: device)
@@ -54,9 +56,11 @@ final class MTPSession {
         return info
     }
 
-    func listItems() throws -> [MediaItem] {
+    func listItems(progress: @escaping (UInt64, UInt64) -> Void) throws -> [MediaItem] {
         var items: [MediaItem] = []
-        var node = LIBMTP_Get_Tracklisting_With_Callback(device, nil, nil)
+        let box = Unmanaged.passRetained(ProgressBox(progress))
+        defer { box.release() }
+        var node = LIBMTP_Get_Tracklisting_With_Callback(device, ProgressBox.callback, box.toOpaque())
         while let track = node {
             items.append(Self.mediaItem(track.pointee))
             node = track.pointee.next

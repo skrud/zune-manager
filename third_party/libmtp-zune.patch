@@ -1,8 +1,83 @@
 diff --git a/src/libmtp.c b/src/libmtp.c
-index 3ee4ea7..03f927d 100644
+index 3ee4ea7..f1a823b 100644
 --- a/src/libmtp.c
 +++ b/src/libmtp.c
-@@ -7321,6 +7321,33 @@ int LIBMTP_Track_Exists(LIBMTP_mtpdevice_t *device,
+@@ -147,6 +147,15 @@ static void add_ptp_error_to_errorstack(LIBMTP_mtpdevice_t *device,
+ 					uint16_t ptp_error,
+ 					char const * const error_text);
+ static void flush_handles(LIBMTP_mtpdevice_t *device);
++
++/*
++ * Progress reporting while LIBMTP_Open_Raw_Device_With_Progress() enumerates the
++ * device's objects. Thread-local, so concurrent opens on other threads don't mix.
++ */
++static __thread LIBMTP_progressfunc_t open_progress_callback = NULL;
++static __thread void const *open_progress_data = NULL;
++static __thread uint64_t open_progress_done = 0;
++static __thread uint64_t open_progress_total = 0;
+ static uint16_t get_handles_recursively(LIBMTP_mtpdevice_t *device,
+ 				    PTPParams *params,
+ 				    uint32_t storageid,
+@@ -2241,6 +2250,33 @@ LIBMTP_mtpdevice_t *LIBMTP_Open_Raw_Device(LIBMTP_raw_device_t *rawdevice)
+   return mtp_device;
+ }
+ 
++/**
++ * Like LIBMTP_Open_Raw_Device(), but reports progress while the device's objects
++ * are enumerated, which can take a minute on large devices that have to be read
++ * object by object (e.g. the Zune).
++ * @param rawdevice the raw device to open.
++ * @param callback called after each object is read with the number read so far and
++ *        the total (0 if the device couldn't say). Its return value is ignored:
++ *        opening can't be cancelled.
++ * @param data passed to the callback.
++ * @return a device pointer, or NULL on failure.
++ */
++LIBMTP_mtpdevice_t *LIBMTP_Open_Raw_Device_With_Progress(LIBMTP_raw_device_t *rawdevice,
++                                                         LIBMTP_progressfunc_t const callback,
++                                                         void const * const data)
++{
++  LIBMTP_mtpdevice_t *mtp_device;
++
++  open_progress_callback = callback;
++  open_progress_data = data;
++  open_progress_done = 0;
++  open_progress_total = 0;
++  mtp_device = LIBMTP_Open_Raw_Device(rawdevice);
++  open_progress_callback = NULL;
++  open_progress_data = NULL;
++  return mtp_device;
++}
++
+ /**
+  * To read events sent by the device, repeatedly call this function from a secondary
+  * thread until the return value is < 0.
+@@ -2859,6 +2895,10 @@ static uint16_t get_handles_recursively(LIBMTP_mtpdevice_t *device,
+     ret = ptp_object_want(params,currentHandles.val[i],
+ 			  PTPOBJECT_OBJECTINFO_LOADED, &ob);
+     if (ret == PTP_RC_OK) {
++      if (open_progress_callback != NULL) {
++        open_progress_done++;
++        open_progress_callback(open_progress_done, open_progress_total, open_progress_data);
++      }
+       if (ob->oi.ObjectFormat == PTP_OFC_Association)
+         get_handles_recursively(device, params,
+ 				storageid, currentHandles.val[i]);
+@@ -2907,6 +2947,13 @@ static void flush_handles(LIBMTP_mtpdevice_t *device)
+   // If the previous failed or returned no objects, use classic
+   // methods instead.
+   if (params->objects.len == 0) {
++    if (open_progress_callback != NULL &&
++        ptp_operation_issupported(params, PTP_OC_GetNumObjects)) {
++      uint32_t count = 0;
++      if (ptp_getnumobjects(params, PTP_GOH_ALL_STORAGE, 0x00000000U,
++                            PTP_GOH_ALL_ASSOCS, &count) == PTP_RC_OK)
++        open_progress_total = count;
++    }
+     // Get all the handles using just standard commands.
+     if (device->storage == NULL) {
+       get_handles_recursively(device, params,
+@@ -7321,6 +7368,33 @@ int LIBMTP_Track_Exists(LIBMTP_mtpdevice_t *device,
    return 0;
  }
  
@@ -37,10 +112,19 @@ index 3ee4ea7..03f927d 100644
   * This creates a new folder structure and allocates memory
   * for it. Notice that if you add strings to this structure they
 diff --git a/src/libmtp.h.in b/src/libmtp.h.in
-index c1deaea..5e195dc 100644
+index c1deaea..1f8b814 100644
 --- a/src/libmtp.h.in
 +++ b/src/libmtp.h.in
-@@ -1007,6 +1007,7 @@ int LIBMTP_Send_Track_From_Handler(LIBMTP_mtpdevice_t *,
+@@ -839,6 +839,8 @@ int LIBMTP_Get_Supported_Devices_List(LIBMTP_device_entry_t ** const, int * cons
+ LIBMTP_error_number_t LIBMTP_Detect_Raw_Devices(LIBMTP_raw_device_t **, int *);
+ int LIBMTP_Check_Specific_Device(int busno, int devno);
+ LIBMTP_mtpdevice_t *LIBMTP_Open_Raw_Device(LIBMTP_raw_device_t *);
++LIBMTP_mtpdevice_t *LIBMTP_Open_Raw_Device_With_Progress(LIBMTP_raw_device_t *,
++                                                         LIBMTP_progressfunc_t const, void const * const);
+ LIBMTP_mtpdevice_t *LIBMTP_Open_Raw_Device_Uncached(LIBMTP_raw_device_t *);
+ /* Begin old, legacy interface */
+ LIBMTP_mtpdevice_t *LIBMTP_Get_Device(int);
+@@ -1007,6 +1009,7 @@ int LIBMTP_Send_Track_From_Handler(LIBMTP_mtpdevice_t *,
  int LIBMTP_Update_Track_Metadata(LIBMTP_mtpdevice_t *,
  			LIBMTP_track_t const * const);
  int LIBMTP_Track_Exists(LIBMTP_mtpdevice_t *, uint32_t const);
@@ -49,10 +133,18 @@ index c1deaea..5e195dc 100644
  /** @} */
  
 diff --git a/src/libmtp.sym b/src/libmtp.sym
-index c84c2c9..bd70a8f 100644
+index c84c2c9..7fd47bf 100644
 --- a/src/libmtp.sym
 +++ b/src/libmtp.sym
-@@ -78,6 +78,7 @@ LIBMTP_Send_Track_From_File_Descriptor
+@@ -4,6 +4,7 @@ LIBMTP_Get_Supported_Devices_List
+ LIBMTP_Detect_Raw_Devices
+ LIBMTP_Check_Specific_Device
+ LIBMTP_Open_Raw_Device
++LIBMTP_Open_Raw_Device_With_Progress
+ LIBMTP_Open_Raw_Device_Uncached
+ LIBMTP_Get_Device
+ LIBMTP_Get_First_Device
+@@ -78,6 +79,7 @@ LIBMTP_Send_Track_From_File_Descriptor
  LIBMTP_Send_Track_From_Handler
  LIBMTP_Update_Track_Metadata
  LIBMTP_Track_Exists

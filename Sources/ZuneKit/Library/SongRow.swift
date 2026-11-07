@@ -14,8 +14,8 @@ public enum SongRow: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// Everything: artist and album headings, no track numbers. One artist: album headings
-    /// with track numbers. One album: just its songs, with track numbers.
+    /// Everything: artist and album headings. One artist: album headings. One album: just its
+    /// songs. Songs always show their track numbers.
     public static func rows(index: LibraryIndex, artist: String?, album: AlbumKey?, matching query: String) -> [SongRow] {
         let groups = index.songGroups(artist: artist, album: album, matching: query)
         if album != nil {
@@ -26,7 +26,7 @@ public enum SongRow: Identifiable, Hashable, Sendable {
             if artist == nil { rows.append(.artistHeading(group.artist)) }
             for albumGroup in group.albums {
                 rows.append(.albumHeading(albumGroup.album))
-                rows += albumGroup.items.map { .song($0, showTrack: artist != nil) }
+                rows += albumGroup.items.map { .song($0, showTrack: true) }
             }
         }
         return rows

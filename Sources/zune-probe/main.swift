@@ -19,7 +19,20 @@ let usage = """
       rm <id>...                delete objects and verify they're gone
       add-test-album <dir>      put every MP3 in <dir>, make one album with the first file's art,
                                 verify everything, read the art back (one connection)
+    Set ZUNE_PROBE_PROGRESS=1 to print connect progress and stage timings.
     """
+
+/// A value shared with progress callbacks on the device thread.
+final class Locked<Value>: @unchecked Sendable {
+    private var value: Value
+    private let lock = NSLock()
+    init(_ value: Value) { self.value = value }
+    func update<R>(_ body: (inout Value) -> R) -> R {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&value)
+    }
+}
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -77,7 +90,21 @@ func put(_ file: URL) async throws -> (LocalSong, MediaItem) {
 }
 
 do {
-    let snapshot = try await device.connect()
+    let started = Date()
+    let stageStart = Locked<[ConnectProgress.Stage: Date]>([:])
+    let snapshot = try await device.connect { p in
+        stageStart.update { if $0[p.stage] == nil { $0[p.stage] = Date() } }
+        if ProcessInfo.processInfo.environment["ZUNE_PROBE_PROGRESS"] != nil {
+            let s = Date().timeIntervalSince(started)
+            FileHandle.standardError.write(Data(String(format: "[%5.1fs] %@ %d/%d\n", s, "\(p.stage)", p.done, p.total).utf8))
+        }
+    }
+    if ProcessInfo.processInfo.environment["ZUNE_PROBE_PROGRESS"] != nil {
+        let total = Date().timeIntervalSince(started)
+        let songs = stageStart.update { $0[.readingSongs] }
+        FileHandle.standardError.write(Data(String(format: "connect %.1fs (objects %.1fs, songs %.1fs)\n", total,
+            songs.map { $0.timeIntervalSince(started) } ?? total, songs.map { Date().timeIntervalSince($0) } ?? 0).utf8))
+    }
     switch (command, args.count) {
     case ("info", 1):
         let gb = { (b: UInt64) in String(format: "%.1f GB", Double(b) / 1e9) }

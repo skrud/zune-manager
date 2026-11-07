@@ -10,9 +10,29 @@ public struct TransferProgress: Hashable, Sendable {
     }
 }
 
+/// How far connecting has got. Connecting reads every object on the Zune one by one
+/// (`readingObjects`), then the details of every song (`readingSongs`), then the album list
+/// (`readingAlbums`, which reports no progress of its own).
+public struct ConnectProgress: Hashable, Sendable {
+    public enum Stage: Hashable, Sendable {
+        case readingObjects, readingSongs, readingAlbums
+    }
+
+    public var stage: Stage
+    public var done: Int
+    /// 0 when the Zune couldn't say how many there are.
+    public var total: Int
+
+    public init(stage: Stage, done: Int, total: Int) {
+        self.stage = stage
+        self.done = done
+        self.total = total
+    }
+}
+
 /// Everything the app asks of the Zune. `LiveZuneDevice` talks to the real one; tests use a fake.
 public protocol ZuneDeviceClient: Sendable {
-    func connect() async throws -> DeviceSnapshot
+    func connect(progress: @escaping @Sendable (ConnectProgress) -> Void) async throws -> DeviceSnapshot
     func refreshStorage() async throws -> StorageInfo
     /// Asks the device itself (not a cache) whether the object exists.
     func objectExists(_ id: UInt32) async throws -> Bool

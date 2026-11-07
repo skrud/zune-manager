@@ -24,6 +24,9 @@ actor FakeZuneDevice: ZuneDeviceClient {
     var downloadShortBy = 0
     var onDownload: (@Sendable (UInt32) async -> Void)?
     var onDelete: (@Sendable (UInt32) async -> Void)?
+    /// Reported in order during connect, then `onConnect` runs before connect returns.
+    var connectProgress: [ConnectProgress] = []
+    var onConnect: (@Sendable () async -> Void)?
 
     init(_ snapshot: DeviceSnapshot, art: [UInt32: Data] = [:]) {
         items = Dictionary(uniqueKeysWithValues: snapshot.items.map { ($0.id, $0) })
@@ -42,9 +45,11 @@ actor FakeZuneDevice: ZuneDeviceClient {
         if stuckOn.contains(op) { throw ZuneError.deviceNotResponding(operation: op) }
     }
 
-    func connect() async throws -> DeviceSnapshot {
+    func connect(progress: @escaping @Sendable (ConnectProgress) -> Void) async throws -> DeviceSnapshot {
         try record("connect", op: "connect")
         if let connectError { throw connectError }
+        for p in connectProgress { progress(p) }
+        await onConnect?()
         return DeviceSnapshot(deviceName: deviceName, items: items.values.sorted { $0.id < $1.id },
                               albums: albums.values.sorted { $0.id < $1.id }, storage: storage)
     }

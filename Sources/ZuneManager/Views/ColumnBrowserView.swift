@@ -4,6 +4,9 @@ import ZuneKit
 /// Artists → Albums → Songs, side by side, like iTunes' column browser.
 struct ColumnBrowserView: View {
     @Bindable var store: ZuneStore
+    /// Asks to delete (after confirmation) or save what was picked. Disabled while busy.
+    var onDelete: (Selection) -> Void = { _ in }
+    var onSave: (Selection) -> Void = { _ in }
 
     /// The "All" rows. List selection can't use nil for a row, so these stand in for it.
     private static let allArtists = "\u{0}all"
@@ -23,6 +26,10 @@ struct ColumnBrowserView: View {
                 Text("All (\(artists.count) Artists)").tag(Self.allArtists)
                 ForEach(artists, id: \.self) { Text($0).tag($0) }
             }
+            .contextMenu(forSelectionType: String.self) { names in
+                if let name = names.first(where: { $0 != Self.allArtists }) { actions(.artist(name)) }
+            }
+            .onDeleteCommand { if let artist = store.selectedArtist { request(.artist(artist)) } }
             .frame(minWidth: 180, idealWidth: 220)
 
             List(selection: albumSelection) {
@@ -38,6 +45,10 @@ struct ColumnBrowserView: View {
                     .tag(album.id)
                 }
             }
+            .contextMenu(forSelectionType: AlbumKey.self) { keys in
+                if let key = keys.first(where: { $0 != Self.allAlbums }) { actions(.album(key)) }
+            }
+            .onDeleteCommand { if let album = store.selectedAlbum { request(.album(album)) } }
             .frame(minWidth: 220, idealWidth: 260)
 
             // One flat ForEach (headings are rows): nested Sections that change shape crashed
@@ -59,7 +70,31 @@ struct ColumnBrowserView: View {
                     }
                 }
             }
+            .contextMenu(forSelectionType: UInt32.self) { ids in
+                if !ids.isEmpty { actions(.items(Self.inRowOrder(ids, songRows))) }
+            }
+            .onDeleteCommand {
+                if !store.selectedItemIDs.isEmpty { request(.items(Self.inRowOrder(store.selectedItemIDs, songRows))) }
+            }
             .frame(minWidth: 280, idealWidth: 360)
+        }
+    }
+
+    @ViewBuilder
+    private func actions(_ selection: Selection) -> some View {
+        Button("Save to Mac…") { onSave(selection) }
+        Button("Delete from Zune…", role: .destructive) { onDelete(selection) }
+    }
+
+    private func request(_ selection: Selection) {
+        guard store.activity == nil else { return }
+        onDelete(selection)
+    }
+
+    /// The selected songs in the order they're shown.
+    static func inRowOrder(_ ids: Set<UInt32>, _ rows: [SongRow]) -> [UInt32] {
+        rows.compactMap { row in
+            if case .song(let song, _) = row, ids.contains(song.id) { song.id } else { nil }
         }
     }
 

@@ -24,14 +24,29 @@ public final class LiveZuneDevice: ZuneDeviceClient, @unchecked Sendable {
         }
     }
 
-    public func connect() async throws -> DeviceSnapshot {
+    public func connect(progress: @escaping @Sendable (ConnectProgress) -> Void) async throws -> DeviceSnapshot {
         try await worker.run("connect", timeout: Self.connectTimeout) { [self] in
             session?.close()
             session = nil
-            let s = try MTPSession.open()
+            let s = try MTPSession.open(progress: Self.throttled(.readingObjects, progress))
             session = s
-            return DeviceSnapshot(deviceName: s.deviceName(), items: try s.listItems(),
+            let items = try s.listItems(progress: Self.throttled(.readingSongs, progress))
+            progress(ConnectProgress(stage: .readingAlbums, done: 0, total: 0))
+            return DeviceSnapshot(deviceName: s.deviceName(), items: items,
                                   albums: try s.listAlbums(), storage: try s.storage())
+        }
+    }
+
+    /// Reports at most ~200 times per stage (libmtp calls back once per object).
+    private static func throttled(_ stage: ConnectProgress.Stage,
+                                  _ report: @escaping @Sendable (ConnectProgress) -> Void) -> (UInt64, UInt64) -> Void {
+        var last = -1
+        return { done, total in
+            let step = max(1, Int(total) / 200)
+            let n = Int(done)
+            guard n == Int(total) || n / step != last else { return }
+            last = n / step
+            report(ConnectProgress(stage: stage, done: n, total: Int(total)))
         }
     }
 

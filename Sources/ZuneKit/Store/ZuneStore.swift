@@ -18,7 +18,14 @@ public final class ZuneStore {
 
     static let unpluggedMessage = "The Zune was unplugged before this could be confirmed."
 
+    /// The loading bar while connecting.
+    public struct ConnectStatus: Equatable, Sendable {
+        public var fraction: Double
+        public var label: String
+    }
+
     public private(set) var phase: Phase = .waitingForDevice
+    public private(set) var connectStatus: ConnectStatus?
     public private(set) var snapshot: DeviceSnapshot?
     public private(set) var index: LibraryIndex?
     public var selectedArtist: String?
@@ -83,14 +90,22 @@ public final class ZuneStore {
         let c = makeClient()
         client = c
         do {
-            let snap = try await c.connect()
+            let snap = try await c.connect { progress in
+                Task { @MainActor in
+                    guard gen == self.generation, self.phase == .connecting else { return }
+                    self.connectStatus = ConnectStatus(fraction: Self.connectFraction(progress),
+                                                       label: Self.connectLabel(progress))
+                }
+            }
             guard gen == generation else { return }
+            connectStatus = nil
             snapshot = snap
             artCache = [:]
             rebuildIndex()
             phase = .ready
         } catch {
             guard gen == generation else { return }
+            connectStatus = nil
             phase = Self.isStuck(error) ? .stuck : .failed(Self.message(error))
         }
     }
@@ -296,6 +311,27 @@ public final class ZuneStore {
 
     func rebuildIndex() {
         index = snapshot.map(LibraryIndex.init(snapshot:))
+    }
+
+    /// Where the loading bar sits. Stages are weighted by how long they took on a Zune 30 with
+    /// ~3,900 objects: objects 34 s, song details 28 s, album list 11 s.
+    static func connectFraction(_ p: ConnectProgress) -> Double {
+        let (start, width): (Double, Double) = switch p.stage {
+        case .readingObjects: (0, 0.47)
+        case .readingSongs: (0.47, 0.38)
+        case .readingAlbums: (0.85, 0)
+        }
+        guard p.total > 0 else { return start }
+        return start + width * min(1, Double(p.done) / Double(p.total))
+    }
+
+    static func connectLabel(_ p: ConnectProgress) -> String {
+        switch p.stage {
+        case .readingObjects:
+            p.total > 0 ? "Reading your Zune… (\(p.done.formatted()) of \(p.total.formatted()) items)" : "Reading your Zune…"
+        case .readingSongs: "Reading song details…"
+        case .readingAlbums: "Reading albums…"
+        }
     }
 
     static func isStuck(_ error: Error) -> Bool {

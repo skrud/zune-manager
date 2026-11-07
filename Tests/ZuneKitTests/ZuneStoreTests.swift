@@ -179,6 +179,39 @@ import Testing
         #expect(await fake.calls.filter { $0.hasPrefix("art") } == ["art 100", "art 999"])
     }
 
+    @Test func connectProgressFillsTheBarInStages() {
+        func f(_ stage: ConnectProgress.Stage, _ done: Int, _ total: Int) -> Double {
+            ZuneStore.connectFraction(ConnectProgress(stage: stage, done: done, total: total))
+        }
+        #expect(f(.readingObjects, 0, 3886) == 0)
+        #expect(abs(f(.readingObjects, 3886, 3886) - 0.47) < 1e-9)
+        #expect(abs(f(.readingSongs, 1942, 3884) - 0.66) < 1e-9)
+        #expect(abs(f(.readingAlbums, 0, 0) - 0.85) < 1e-9)
+        // Unknown totals hold the stage's starting point instead of dividing by zero.
+        #expect(f(.readingObjects, 500, 0) == 0)
+        #expect(abs(f(.readingSongs, 10, 0) - 0.47) < 1e-9)
+        // Never past the stage's end, even if libmtp counts more than it said.
+        #expect(abs(f(.readingObjects, 4000, 3886) - 0.47) < 1e-9)
+    }
+
+    @Test func connectProgressShownWhileConnectingAndClearedAfter() async {
+        let fake = rushFake()
+        let store = makeStore(fake)
+        let seen = Locked<[ZuneStore.ConnectStatus]>([])
+        await fake.configure {
+            $0.connectProgress = [ConnectProgress(stage: .readingObjects, done: 50, total: 100),
+                                  ConnectProgress(stage: .readingAlbums, done: 0, total: 0)]
+            $0.onConnect = {
+                // Progress reaches the store via the main actor; let those updates land first.
+                for _ in 0..<5 { await MainActor.run {} }
+                await MainActor.run { if let s = store.connectStatus { seen.withLock { $0.append(s) } } }
+            }
+        }
+        await store.deviceAttached()
+        #expect(seen.withLock { $0 }.last == ZuneStore.ConnectStatus(fraction: 0.85, label: "Reading albums…"))
+        #expect(store.connectStatus == nil)
+    }
+
     @Test func prepareToQuitReleasesTheZune() async {
         let fake = rushFake()
         let store = await connected(fake)

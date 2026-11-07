@@ -19,10 +19,10 @@ import Testing
         }
     }
 
-    @Test func everythingHasArtistAndAlbumHeadingsAndNoTrackNumbers() {
+    @Test func everythingHasArtistAndAlbumHeadingsAndTrackNumbers() {
         #expect(describe(SongRow.rows(index: index, artist: nil, album: nil, matching: "")) == [
-            "# 3 Inches of Blood", "## LLHM", "4000 Torches",
-            "# Rush", "## 2112", "Lessons", "Tears", "## Moving Pictures", "Tom Sawyer",
+            "# 3 Inches of Blood", "## LLHM", "7. 4000 Torches",
+            "# Rush", "## 2112", "4. Lessons", "5. Tears", "## Moving Pictures", "1. Tom Sawyer",
         ])
     }
 
