@@ -109,6 +109,82 @@ final class MTPSession {
         return Data(bytes: data, count: Int(sample.pointee.size))
     }
 
+    // MARK: - Writing
+
+    /// Copies an MP3 to the Zune's music folder with the song's tags as its metadata.
+    func sendTrack(_ song: LocalSong, progress: @escaping (UInt64, UInt64) -> Void) throws -> MediaItem {
+        guard let track = LIBMTP_new_track_t() else { throw error("copy to Zune") }
+        defer { LIBMTP_destroy_track_t(track) }
+        // libmtp frees these strings with the track, so they must come from strdup.
+        track.pointee.title = strdup(song.title)
+        track.pointee.artist = strdup(song.artist)
+        track.pointee.album = strdup(song.album)
+        track.pointee.genre = strdup(song.genre)
+        if let year = song.year { track.pointee.date = strdup(String(format: "%04d0101T000000.0", year)) }
+        track.pointee.filename = strdup(song.url.lastPathComponent)
+        track.pointee.tracknumber = UInt16(clamping: song.trackNumber)
+        track.pointee.duration = UInt32(clamping: song.durationMs)
+        track.pointee.filesize = song.fileSize
+        track.pointee.filetype = LIBMTP_FILETYPE_MP3
+        track.pointee.parent_id = device.pointee.default_music_folder
+        track.pointee.storage_id = 0
+
+        let box = Unmanaged.passRetained(ProgressBox(progress))
+        defer { box.release() }
+        guard LIBMTP_Send_Track_From_File(device, song.url.path, track, ProgressBox.callback, box.toOpaque()) == 0
+        else { throw error("copy '\(song.title)' to the Zune") }
+        return Self.mediaItem(track.pointee)
+    }
+
+    func createAlbum(name: String, artist: String, itemIDs: [UInt32]) throws -> AlbumObject {
+        let album = try newAlbum(name: name, artist: artist, itemIDs: itemIDs)
+        defer { LIBMTP_destroy_album_t(album) }
+        guard LIBMTP_Create_New_Album(device, album) == 0 else { throw error("create album '\(name)'") }
+        return AlbumObject(id: album.pointee.album_id, name: name, artist: artist, itemIDs: itemIDs)
+    }
+
+    func updateAlbum(_ object: AlbumObject) throws {
+        let album = try newAlbum(name: object.name, artist: object.artist, itemIDs: object.itemIDs)
+        defer { LIBMTP_destroy_album_t(album) }
+        album.pointee.album_id = object.id
+        guard LIBMTP_Update_Album(device, album) == 0 else { throw error("update album '\(object.name)'") }
+    }
+
+    func setAlbumArt(_ albumID: UInt32, art: AlbumArt) throws {
+        guard let sample = LIBMTP_new_filesampledata_t() else { throw error("set album art") }
+        defer { LIBMTP_destroy_filesampledata_t(sample) }
+        let bytes = malloc(art.jpeg.count)!.assumingMemoryBound(to: CChar.self)
+        art.jpeg.copyBytes(to: UnsafeMutableRawBufferPointer(start: bytes, count: art.jpeg.count))
+        sample.pointee.data = bytes
+        sample.pointee.size = UInt64(art.jpeg.count)
+        sample.pointee.width = UInt32(art.width)
+        sample.pointee.height = UInt32(art.height)
+        sample.pointee.filetype = LIBMTP_FILETYPE_JPEG
+        guard LIBMTP_Send_Representative_Sample(device, albumID, sample) == 0 else {
+            throw error("set album art")
+        }
+    }
+
+    func deleteObject(_ id: UInt32) throws {
+        guard LIBMTP_Delete_Object(device, id) == 0 else { throw error("delete \(id)") }
+    }
+
+    private func newAlbum(name: String, artist: String,
+                          itemIDs: [UInt32]) throws -> UnsafeMutablePointer<LIBMTP_album_t> {
+        guard let album = LIBMTP_new_album_t() else { throw error("album") }
+        album.pointee.name = strdup(name)
+        album.pointee.artist = strdup(artist)
+        if !itemIDs.isEmpty {
+            let tracks = malloc(itemIDs.count * MemoryLayout<UInt32>.stride)!.assumingMemoryBound(to: UInt32.self)
+            tracks.initialize(from: itemIDs, count: itemIDs.count)
+            album.pointee.tracks = tracks
+        }
+        album.pointee.no_tracks = UInt32(itemIDs.count)
+        album.pointee.parent_id = 0
+        album.pointee.storage_id = 0
+        return album
+    }
+
     // MARK: - Helpers
 
     /// Carries a Swift progress closure through libmtp's `void *` callback data.

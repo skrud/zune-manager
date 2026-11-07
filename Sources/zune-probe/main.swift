@@ -12,6 +12,13 @@ let usage = """
       exists <id>               yes / no
       get <id> <file>           copy an item to the Mac
       art-get <albumID> <file>  save an album object's cover (prints "no art" if none)
+      make-test-album <dir>     write three tagged test MP3s (artist "Claude Test"); no Zune needed
+      put <file.mp3>            copy an MP3 to the Zune and verify it arrived
+      mkalbum <name> <artist> <id>...   create an album object
+      art-put <albumID> <image> set an album object's cover
+      rm <id>...                delete objects and verify they're gone
+      add-test-album <dir>      put every MP3 in <dir>, make one album with the first file's art,
+                                verify everything, read the art back (one connection)
     """
 
 func fail(_ message: String) -> Never {
@@ -26,7 +33,31 @@ func id(_ s: String) -> UInt32 {
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else { fail(usage) }
+
+if command == "make-test-album", args.count == 2 {
+    let dir = URL(fileURLWithPath: args[1])
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let art = ImageFixture.jpeg(width: 300, height: 300)
+    for (n, title) in ["Probe One", "Probe Two", "Tëst Ünicode / Song"].enumerated() {
+        let file = dir.appendingPathComponent(String(format: "%02d.mp3", n + 1))
+        try MP3Fixture.write(to: file, title: title, artist: "Claude Test", album: "Claude Test Album",
+                             albumArtist: "Claude Test", track: "\(n + 1)/3", year: "2026", genre: "Test",
+                             artworkJPEG: art, seconds: 10)
+        print("wrote \(file.path)")
+    }
+    exit(0)
+}
+
 let device = LiveZuneDevice()
+
+func put(_ file: URL) async throws -> (LocalSong, MediaItem) {
+    let song = try await TagReader.read(file)
+    let item = try await device.sendSong(song) { _ in }
+    print("sent \(item.id) \(song.title)")
+    guard try await device.objectExists(item.id) else { fail("not verified: \(item.id)") }
+    print("verified")
+    return (song, item)
+}
 
 do {
     let snapshot = try await device.connect()
@@ -57,6 +88,42 @@ do {
         } else {
             print("no art")
         }
+    case ("put", 2):
+        _ = try await put(URL(fileURLWithPath: args[1]))
+    case ("mkalbum", _) where args.count >= 4:
+        let album = try await device.createAlbum(name: args[1], artist: args[2], itemIDs: args[3...].map(id))
+        print("album \(album.id)")
+    case ("art-put", 3):
+        let image = try Data(contentsOf: URL(fileURLWithPath: args[2]))
+        guard let art = Artwork.zuneAlbumArt(from: image) else { fail("not an image: \(args[2])") }
+        try await device.setAlbumArt(albumID: id(args[1]), art: art)
+        print("art set (\(art.width)x\(art.height))")
+    case ("rm", _) where args.count >= 2:
+        for target in args[1...].map(id) {
+            try await device.delete(target)
+            let gone = try await !device.objectExists(target)
+            print("deleted \(target): \(gone ? "gone" : "STILL THERE")")
+            if !gone { fail("delete not verified: \(target)") }
+        }
+    case ("add-test-album", 2):
+        let files = FileScanner.scan([URL(fileURLWithPath: args[1])]).mp3s
+        guard let first = files.first else { fail("no MP3s in \(args[1])") }
+        var sent: [(LocalSong, MediaItem)] = []
+        for file in files { sent.append(try await put(file)) }
+        let song = sent[0].0
+        let album = try await device.createAlbum(name: song.album, artist: song.effectiveAlbumArtist,
+                                                 itemIDs: sent.map(\.1.id))
+        print("album \(album.id)")
+        guard let embedded = try await TagReader.read(first).embeddedArtwork,
+              let art = Artwork.zuneAlbumArt(from: embedded) else { fail("first file has no art") }
+        try await device.setAlbumArt(albumID: album.id, art: art)
+        print("art set (\(art.width)x\(art.height))")
+        if let back = try await device.albumArt(albumID: album.id) {
+            print("art read back: \(back.count) bytes, JPEG: \(back.starts(with: [0xFF, 0xD8]))")
+        } else {
+            print("art read back: no art")
+        }
+        print("ids to remove: \((sent.map(\.1.id) + [album.id]).map(String.init).joined(separator: " "))")
     default:
         await device.disconnect()
         fail(usage)

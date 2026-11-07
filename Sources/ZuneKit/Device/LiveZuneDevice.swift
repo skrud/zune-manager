@@ -56,23 +56,25 @@ public final class LiveZuneDevice: ZuneDeviceClient, @unchecked Sendable {
 
     public func sendSong(_ song: LocalSong,
                          progress: @escaping @Sendable (TransferProgress) -> Void) async throws -> MediaItem {
-        throw ZuneError.libmtp(operation: "copy to Zune", message: "not implemented")
+        try await withSession("copy to Zune", timeout: Self.transferTimeout(bytes: song.fileSize)) { s in
+            try s.sendTrack(song) { progress(TransferProgress(sent: $0, total: $1)) }
+        }
     }
 
     public func createAlbum(name: String, artist: String, itemIDs: [UInt32]) async throws -> AlbumObject {
-        throw ZuneError.libmtp(operation: "create album", message: "not implemented")
+        try await withSession("create album") { try $0.createAlbum(name: name, artist: artist, itemIDs: itemIDs) }
     }
 
     public func updateAlbum(_ album: AlbumObject) async throws {
-        throw ZuneError.libmtp(operation: "update album", message: "not implemented")
+        try await withSession("update album") { try $0.updateAlbum(album) }
     }
 
     public func setAlbumArt(albumID: UInt32, art: AlbumArt) async throws {
-        throw ZuneError.libmtp(operation: "set album art", message: "not implemented")
+        try await withSession("set album art") { try $0.setAlbumArt(albumID, art: art) }
     }
 
     public func delete(_ id: UInt32) async throws {
-        throw ZuneError.libmtp(operation: "delete", message: "not implemented")
+        try await withSession("delete") { try $0.deleteObject(id) }
     }
 
     public func disconnect() async {
