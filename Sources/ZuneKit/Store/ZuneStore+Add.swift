@@ -1,0 +1,121 @@
+import Foundation
+
+/// What the user picked to add, read and checked against the Zune, before anything is copied.
+public struct AddPreparation: Hashable, Sendable {
+    public var songs: [LocalSong]
+    public var duplicates: [Duplicate]
+    public var nonMP3: [URL]
+    /// File → why its tags couldn't be read.
+    public var unreadable: [URL: String]
+}
+
+extension ZuneStore {
+    public func prepareAdd(_ urls: [URL]) async -> AddPreparation {
+        // Walking a big folder takes a while; keep it off the main thread so the window stays live.
+        let scan = await Task.detached(priority: .userInitiated) { FileScanner.scan(urls) }.value
+        var songs: [LocalSong] = []
+        var unreadable: [URL: String] = [:]
+        for url in scan.mp3s {
+            do {
+                songs.append(try await TagReader.read(url))
+            } catch {
+                unreadable[url] = error.localizedDescription
+            }
+        }
+        return AddPreparation(songs: songs,
+                              duplicates: Duplicates.find(incoming: songs, existing: snapshot?.items ?? []),
+                              nonMP3: scan.skipped, unreadable: unreadable)
+    }
+
+    public func planAdd(_ preparation: AddPreparation, choices: [URL: DuplicateChoice]) throws -> AddPlan {
+        try AddPlanner.plan(songs: preparation.songs, duplicates: preparation.duplicates, choices: choices,
+                            freeBytes: snapshot?.storage.freeBytes ?? 0)
+    }
+
+    public func add(_ plan: AddPlan, preparation: AddPreparation) async {
+        guard let client else { return }
+        var artFailures: [OperationSummary.Failure] = []
+
+        guard let run = await perform("Add to Zune", plan.steps, name: \.song.title, { step in
+            let song = step.song
+            if plan.overwriteMode == .deleteThenUpload, let old = step.replacing {
+                guard try await self.removeOldCopy(old, client: client) else {
+                    return .failed("Couldn't remove the copy already on the Zune, so this wasn't copied.")
+                }
+            }
+
+            let item = try await client.sendSong(song) { p in Task { @MainActor in self.report(p) } }
+            guard try await client.objectExists(item.id) else { return .failed("The Zune didn't confirm the copy.") }
+            self.addItem(item)
+
+            do {
+                switch AddPlanner.albumTarget(for: song, albums: self.snapshot?.albums ?? []) {
+                case .existing(var album):
+                    album.itemIDs.append(item.id)
+                    try await client.updateAlbum(album)
+                    self.storeAlbum(album)
+                case .create(let name, let artist):
+                    let album = try await client.createAlbum(name: name, artist: artist, itemIDs: [item.id])
+                    self.storeAlbum(album)
+                    if let art = await Task.detached(priority: .userInitiated, operation: { Self.albumArt(for: song) }).value {
+                        do {
+                            try await client.setAlbumArt(albumID: album.id, art: art)
+                        } catch {
+                            if Self.isStuck(error) { throw error }
+                            artFailures.append(.init(name: "\(name) (art)", reason: Self.message(error)))
+                        }
+                    }
+                }
+            } catch {
+                if Self.isStuck(error) { throw error }
+                return .failed("Copied, but couldn't add it to its album: \(Self.message(error))")
+            }
+
+            if plan.overwriteMode == .uploadThenDelete, let old = step.replacing {
+                guard try await self.removeOldCopy(old, client: client) else {
+                    return .failed("Copied, but the old copy couldn't be removed.")
+                }
+            }
+            return .succeeded
+        }) else { return }
+
+        var summary = run.summary
+        summary.skipped = plan.skippedDuplicates.map { "\($0.title) (already on the Zune)" }
+            + plan.skippedInBatch.map { "\($0.title) (picked twice)" }
+            + preparation.nonMP3.map { "\($0.lastPathComponent) (not an MP3)" }
+            + preparation.unreadable.keys.sorted { $0.path < $1.path }.map {
+                "\($0.lastPathComponent) (couldn't read it: \(preparation.unreadable[$0]!))"
+            }
+            + summary.skipped
+        summary.failed += artFailures
+        await finish(summary, generation: run.generation, refreshStorage: true)
+    }
+
+    /// Deletes an existing copy and confirms it's gone. Returns false if the Zune still has it.
+    /// An album entry that held only this copy is deleted too, so no empty album is left behind.
+    private func removeOldCopy(_ old: MediaItem, client: any ZuneDeviceClient) async throws -> Bool {
+        let holders = snapshot?.albums.filter { $0.itemIDs.contains(old.id) } ?? []
+        try await client.delete(old.id)
+        guard try await !client.objectExists(old.id) else { return false }
+        removeItem(old.id)
+        for album in holders {
+            let remaining = album.itemIDs.filter { id in id != old.id && snapshot?.items.contains { $0.id == id } == true }
+            guard remaining.isEmpty else { continue }
+            do {
+                try await client.delete(album.id)
+                if try await !client.objectExists(album.id) { removeAlbum(album.id) }
+            } catch {
+                if Self.isStuck(error) { throw error }
+                // An empty album entry left behind is harmless; the song itself was replaced.
+            }
+        }
+        return true
+    }
+
+    /// The song's embedded cover, else cover.jpg / folder.jpg next to it, ready for the Zune.
+    nonisolated static func albumArt(for song: LocalSong) -> AlbumArt? {
+        let data = song.embeddedArtwork
+            ?? FileScanner.coverImage(forSongAt: song.url).flatMap { try? Data(contentsOf: $0) }
+        return data.flatMap(Artwork.zuneAlbumArt(from:))
+    }
+}

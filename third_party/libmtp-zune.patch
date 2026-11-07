@@ -1,0 +1,192 @@
+diff --git a/src/libmtp.c b/src/libmtp.c
+index 3ee4ea7..f1a823b 100644
+--- a/src/libmtp.c
++++ b/src/libmtp.c
+@@ -147,6 +147,15 @@ static void add_ptp_error_to_errorstack(LIBMTP_mtpdevice_t *device,
+ 					uint16_t ptp_error,
+ 					char const * const error_text);
+ static void flush_handles(LIBMTP_mtpdevice_t *device);
++
++/*
++ * Progress reporting while LIBMTP_Open_Raw_Device_With_Progress() enumerates the
++ * device's objects. Thread-local, so concurrent opens on other threads don't mix.
++ */
++static __thread LIBMTP_progressfunc_t open_progress_callback = NULL;
++static __thread void const *open_progress_data = NULL;
++static __thread uint64_t open_progress_done = 0;
++static __thread uint64_t open_progress_total = 0;
+ static uint16_t get_handles_recursively(LIBMTP_mtpdevice_t *device,
+ 				    PTPParams *params,
+ 				    uint32_t storageid,
+@@ -2241,6 +2250,33 @@ LIBMTP_mtpdevice_t *LIBMTP_Open_Raw_Device(LIBMTP_raw_device_t *rawdevice)
+   return mtp_device;
+ }
+ 
++/**
++ * Like LIBMTP_Open_Raw_Device(), but reports progress while the device's objects
++ * are enumerated, which can take a minute on large devices that have to be read
++ * object by object (e.g. the Zune).
++ * @param rawdevice the raw device to open.
++ * @param callback called after each object is read with the number read so far and
++ *        the total (0 if the device couldn't say). Its return value is ignored:
++ *        opening can't be cancelled.
++ * @param data passed to the callback.
++ * @return a device pointer, or NULL on failure.
++ */
++LIBMTP_mtpdevice_t *LIBMTP_Open_Raw_Device_With_Progress(LIBMTP_raw_device_t *rawdevice,
++                                                         LIBMTP_progressfunc_t const callback,
++                                                         void const * const data)
++{
++  LIBMTP_mtpdevice_t *mtp_device;
++
++  open_progress_callback = callback;
++  open_progress_data = data;
++  open_progress_done = 0;
++  open_progress_total = 0;
++  mtp_device = LIBMTP_Open_Raw_Device(rawdevice);
++  open_progress_callback = NULL;
++  open_progress_data = NULL;
++  return mtp_device;
++}
++
+ /**
+  * To read events sent by the device, repeatedly call this function from a secondary
+  * thread until the return value is < 0.
+@@ -2859,6 +2895,10 @@ static uint16_t get_handles_recursively(LIBMTP_mtpdevice_t *device,
+     ret = ptp_object_want(params,currentHandles.val[i],
+ 			  PTPOBJECT_OBJECTINFO_LOADED, &ob);
+     if (ret == PTP_RC_OK) {
++      if (open_progress_callback != NULL) {
++        open_progress_done++;
++        open_progress_callback(open_progress_done, open_progress_total, open_progress_data);
++      }
+       if (ob->oi.ObjectFormat == PTP_OFC_Association)
+         get_handles_recursively(device, params,
+ 				storageid, currentHandles.val[i]);
+@@ -2907,6 +2947,13 @@ static void flush_handles(LIBMTP_mtpdevice_t *device)
+   // If the previous failed or returned no objects, use classic
+   // methods instead.
+   if (params->objects.len == 0) {
++    if (open_progress_callback != NULL &&
++        ptp_operation_issupported(params, PTP_OC_GetNumObjects)) {
++      uint32_t count = 0;
++      if (ptp_getnumobjects(params, PTP_GOH_ALL_STORAGE, 0x00000000U,
++                            PTP_GOH_ALL_ASSOCS, &count) == PTP_RC_OK)
++        open_progress_total = count;
++    }
+     // Get all the handles using just standard commands.
+     if (device->storage == NULL) {
+       get_handles_recursively(device, params,
+@@ -7321,6 +7368,33 @@ int LIBMTP_Track_Exists(LIBMTP_mtpdevice_t *device,
+   return 0;
+ }
+ 
++/**
++ * This asks the device itself whether an object exists, bypassing the
++ * object cache (unlike LIBMTP_Track_Exists(), which answers from the
++ * cache and so cannot confirm that a send or delete really happened).
++ * @param device a pointer to the device to query.
++ * @param id the object ID to look for.
++ * @return 1 if the object exists, 0 if the device reports an invalid
++ *         handle, -1 on any other error.
++ */
++int LIBMTP_Object_Exists_On_Device(LIBMTP_mtpdevice_t *device,
++           uint32_t const id)
++{
++  PTPParams *params = (PTPParams *) device->params;
++  PTPObjectInfo oi;
++  uint16_t ret;
++
++  memset(&oi, 0, sizeof(oi));
++  ret = ptp_getobjectinfo(params, id, &oi);
++  ptp_free_objectinfo(&oi);
++  if (ret == PTP_RC_OK)
++    return 1;
++  if (ret == PTP_RC_InvalidObjectHandle)
++    return 0;
++  add_ptp_error_to_errorstack(device, ret, "LIBMTP_Object_Exists_On_Device(): could not query object.");
++  return -1;
++}
++
+ /**
+  * This creates a new folder structure and allocates memory
+  * for it. Notice that if you add strings to this structure they
+diff --git a/src/libmtp.h.in b/src/libmtp.h.in
+index c1deaea..1f8b814 100644
+--- a/src/libmtp.h.in
++++ b/src/libmtp.h.in
+@@ -839,6 +839,8 @@ int LIBMTP_Get_Supported_Devices_List(LIBMTP_device_entry_t ** const, int * cons
+ LIBMTP_error_number_t LIBMTP_Detect_Raw_Devices(LIBMTP_raw_device_t **, int *);
+ int LIBMTP_Check_Specific_Device(int busno, int devno);
+ LIBMTP_mtpdevice_t *LIBMTP_Open_Raw_Device(LIBMTP_raw_device_t *);
++LIBMTP_mtpdevice_t *LIBMTP_Open_Raw_Device_With_Progress(LIBMTP_raw_device_t *,
++                                                         LIBMTP_progressfunc_t const, void const * const);
+ LIBMTP_mtpdevice_t *LIBMTP_Open_Raw_Device_Uncached(LIBMTP_raw_device_t *);
+ /* Begin old, legacy interface */
+ LIBMTP_mtpdevice_t *LIBMTP_Get_Device(int);
+@@ -1007,6 +1009,7 @@ int LIBMTP_Send_Track_From_Handler(LIBMTP_mtpdevice_t *,
+ int LIBMTP_Update_Track_Metadata(LIBMTP_mtpdevice_t *,
+ 			LIBMTP_track_t const * const);
+ int LIBMTP_Track_Exists(LIBMTP_mtpdevice_t *, uint32_t const);
++int LIBMTP_Object_Exists_On_Device(LIBMTP_mtpdevice_t *, uint32_t const);
+ int LIBMTP_Set_Track_Name(LIBMTP_mtpdevice_t *, LIBMTP_track_t *, const char *);
+ /** @} */
+ 
+diff --git a/src/libmtp.sym b/src/libmtp.sym
+index c84c2c9..7fd47bf 100644
+--- a/src/libmtp.sym
++++ b/src/libmtp.sym
+@@ -4,6 +4,7 @@ LIBMTP_Get_Supported_Devices_List
+ LIBMTP_Detect_Raw_Devices
+ LIBMTP_Check_Specific_Device
+ LIBMTP_Open_Raw_Device
++LIBMTP_Open_Raw_Device_With_Progress
+ LIBMTP_Open_Raw_Device_Uncached
+ LIBMTP_Get_Device
+ LIBMTP_Get_First_Device
+@@ -78,6 +79,7 @@ LIBMTP_Send_Track_From_File_Descriptor
+ LIBMTP_Send_Track_From_Handler
+ LIBMTP_Update_Track_Metadata
+ LIBMTP_Track_Exists
++LIBMTP_Object_Exists_On_Device
+ LIBMTP_new_folder_t
+ LIBMTP_destroy_folder_t
+ LIBMTP_Get_Folder_List
+diff --git a/src/libusb1-glue.c b/src/libusb1-glue.c
+index 6da4f35..0278322 100644
+--- a/src/libusb1-glue.c
++++ b/src/libusb1-glue.c
+@@ -1426,7 +1426,17 @@ ptp_usb_getdata (PTPParams* params, PTPContainer* ptp, PTPDataHandler *handler)
+ 			break;
+ 		}
+ 		if (dtoh16(usbdata.type)!=PTP_USB_CONTAINER_DATA) {
+-			ret = PTP_ERROR_DATA_EXPECTED;
++			/*
++			 * The device skipped the data phase and answered straight away
++			 * (e.g. the Zune answers GetObjectInfo on a missing object with
++			 * InvalidObjectHandle). That response is consumed here, so pass
++			 * its code on instead of losing it.
++			 */
++			if (dtoh16(usbdata.type)==PTP_USB_CONTAINER_RESPONSE &&
++			    dtoh16(usbdata.code)!=PTP_RC_OK)
++				ret = dtoh16(usbdata.code);
++			else
++				ret = PTP_ERROR_DATA_EXPECTED;
+ 			break;
+ 		}
+ 		if (dtoh16(usbdata.code)!=ptp->Code) {
+diff --git a/src/music-players.h b/src/music-players.h
+index 7664c0e..b5c0160 100644
+--- a/src/music-players.h
++++ b/src/music-players.h
+@@ -454,7 +454,9 @@
+   { "Microsoft", 0x045e, "Kin 1", 0x0640, DEVICE_FLAG_NONE },
+   { "Microsoft/Sharp/nVidia", 0x045e, "Kin TwoM", 0x0641, DEVICE_FLAG_NONE },
+   // Reported by Farooq Zaman (used for all Zunes)
+-  { "Microsoft", 0x045e, "Zune", 0x0710, DEVICE_FLAG_NONE },
++  // GetObjPropList for all objects stalls the device after the MTPZ handshake
++  { "Microsoft", 0x045e, "Zune", 0x0710,
++      DEVICE_FLAG_BROKEN_MTPGETOBJPROPLIST_ALL },
+   /* https://sourceforge.net/p/libmtp/feature-requests/155/ */
+   { "Microsoft", 0x045e, "Lumia 950 XL Dual SIM (RM-1116)", 0x0a00, DEVICE_FLAG_NONE },
+   // Reported by Olegs Jeremejevs
