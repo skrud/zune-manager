@@ -24,7 +24,7 @@ with MTPZ support (the Zune refuses file transfers without the MTPZ handshake).
 
 ```sh
 scripts/build-libmtp.sh   # builds the fork, installs to ~/.local/opt/libmtp-zune
-swift test                # unit tests (no Zune needed)
+scripts/test.sh           # unit tests (no Zune needed)
 scripts/bundle-app.sh     # builds "build/Zune Manager.app"
 ```
 

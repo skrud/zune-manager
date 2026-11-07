@@ -18,11 +18,13 @@ for dep in libgcrypt libusb libtool gettext; do
     || die "missing Homebrew packages; run: brew install libgcrypt libusb autoconf automake libtool gettext pkg-config"
 done
 
+export MACOSX_DEPLOYMENT_TARGET=14.0  # match the app's minimum macOS
 export PATH="$(brew --prefix libtool)/libexec/gnubin:$(brew --prefix gettext)/bin:$PATH"
 HB=$(brew --prefix)
 
 cd "$FORK"
 [ -x configure ] || ./autogen.sh
+make clean >/dev/null 2>&1 || true
 ./configure --prefix="$PREFIX" CPPFLAGS="-I$HB/include" LDFLAGS="-L$HB/lib" >/dev/null
 make -j8 >/dev/null
 make install >/dev/null
