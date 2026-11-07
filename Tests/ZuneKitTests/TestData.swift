@@ -26,3 +26,18 @@ enum TestData {
                        storage: StorageInfo(capacityBytes: 29_814_980_608, freeBytes: free))
     }
 }
+
+/// A value shared between test closures on different threads (Mutex needs macOS 15).
+final class Locked<Value>: @unchecked Sendable {
+    private var value: Value
+    private let lock = NSLock()
+
+    init(_ value: Value) { self.value = value }
+
+    @discardableResult
+    func withLock<R>(_ body: (inout Value) -> R) -> R {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&value)
+    }
+}
