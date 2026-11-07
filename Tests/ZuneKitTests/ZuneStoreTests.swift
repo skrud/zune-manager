@@ -78,6 +78,26 @@ import Testing
         #expect(store.activity == nil)
     }
 
+    @Test func deletingLastSongOfAlbumDeletesTheAlbumEntry() async throws {
+        let fake = FakeZuneDevice(TestData.snapshot(
+            [TestData.item(1, "Only One", album: "Single"), TestData.item(2, "Other", album: "2112")],
+            albums: [AlbumObject(id: 100, name: "Single", artist: "Rush", itemIDs: [1]),
+                     AlbumObject(id: 101, name: "2112", artist: "Rush", itemIDs: [2])]))
+        let store = await connected(fake)
+        await store.delete(try #require(store.deletePlan(for: .items([1]))))
+        #expect(await fake.calls.contains("delete 100"))
+        #expect(await fake.albums[100] == nil)
+        #expect(store.snapshot?.albums.map(\.id) == [101])
+    }
+
+    @Test func deletingSongsOneByOneDeletesTheAlbumWithTheLast() async throws {
+        let store = await connected(rushFake())
+        await store.delete(try #require(store.deletePlan(for: .items([1]))))
+        #expect(store.snapshot?.albums.map(\.id) == [100])
+        await store.delete(try #require(store.deletePlan(for: .items([2]))))
+        #expect(store.snapshot?.albums.isEmpty == true)
+    }
+
     @Test func deleteSongRemovesItFromItsAlbumObject() async throws {
         let store = await connected(rushFake())
         await store.delete(try #require(store.deletePlan(for: .items([1]))))
