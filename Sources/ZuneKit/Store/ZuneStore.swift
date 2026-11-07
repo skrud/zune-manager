@@ -273,6 +273,19 @@ public final class ZuneStore {
         }
     }
 
+    func addItem(_ item: MediaItem) {
+        snapshot?.items.append(item)
+    }
+
+    /// Adds the album object, or replaces the one with the same id.
+    func storeAlbum(_ album: AlbumObject) {
+        if let i = snapshot?.albums.firstIndex(where: { $0.id == album.id }) {
+            snapshot?.albums[i] = album
+        } else {
+            snapshot?.albums.append(album)
+        }
+    }
+
     func rebuildIndex() {
         index = snapshot.map(LibraryIndex.init(snapshot:))
     }
