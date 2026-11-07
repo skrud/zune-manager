@@ -91,10 +91,23 @@ extension ZuneStore {
     }
 
     /// Deletes an existing copy and confirms it's gone. Returns false if the Zune still has it.
+    /// An album entry that held only this copy is deleted too, so no empty album is left behind.
     private func removeOldCopy(_ old: MediaItem, client: any ZuneDeviceClient) async throws -> Bool {
+        let holders = snapshot?.albums.filter { $0.itemIDs.contains(old.id) } ?? []
         try await client.delete(old.id)
         guard try await !client.objectExists(old.id) else { return false }
         removeItem(old.id)
+        for album in holders {
+            let remaining = album.itemIDs.filter { id in id != old.id && snapshot?.items.contains { $0.id == id } == true }
+            guard remaining.isEmpty else { continue }
+            do {
+                try await client.delete(album.id)
+                if try await !client.objectExists(album.id) { removeAlbum(album.id) }
+            } catch {
+                if Self.isStuck(error) { throw error }
+                // An empty album entry left behind is harmless; the song itself was replaced.
+            }
+        }
         return true
     }
 

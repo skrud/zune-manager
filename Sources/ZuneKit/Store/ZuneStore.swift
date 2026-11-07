@@ -139,7 +139,7 @@ public final class ZuneStore {
                     if try await client.objectExists(albumID) {
                         summary.failed["\(album.name) (album)"] = "Still on the Zune after deleting."
                     } else {
-                        snapshot?.albums.removeAll { $0.id == albumID }
+                        removeAlbum(albumID)
                     }
                 } catch {
                     if Self.isStuck(error) {
@@ -294,6 +294,10 @@ public final class ZuneStore {
                 return a
             }
         }
+    }
+
+    func removeAlbum(_ id: UInt32) {
+        snapshot?.albums.removeAll { $0.id == id }
     }
 
     func addItem(_ item: MediaItem) {

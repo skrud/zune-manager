@@ -102,6 +102,22 @@ import ZuneTestSupport
         #expect(store.lastSummary?.succeeded == ["Tears", "Lessons"])
     }
 
+    @Test func overwriteRemovesAnAlbumEntryLeftEmpty() async throws {
+        try writeSongs()
+        // The old "Tears" sits alone in an album entry under a different album artist, so the
+        // new copy joins a new entry and the old one would be left empty.
+        let fake = FakeZuneDevice(TestData.snapshot(
+            [TestData.item(5, "Tears")],
+            albums: [AlbumObject(id: 100, name: "2112", artist: "Rush (Remastered)", itemIDs: [5])]))
+        let store = await connected(fake)
+        _ = try await addAll(store, overwrite: true)
+        let calls = await fake.calls
+        #expect(calls.contains("delete 100"))
+        #expect(await fake.albums[100] == nil)
+        #expect(store.snapshot?.albums.contains { $0.id == 100 } == false)
+        #expect(store.lastSummary?.failed.isEmpty == true)
+    }
+
     @Test func overwriteDeletesFirstWhenTight() async throws {
         try writeSongs()
         // Room for the margin but not for both songs; deleting the 1 MB old copy makes room.
