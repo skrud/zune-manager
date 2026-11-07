@@ -88,6 +88,25 @@ do {
         } else {
             print("no art")
         }
+    case ("read-check", 2):
+        // exists (real + bogus id), copy the first MP3 to <dir>, read art for the first albums.
+        let dir = URL(fileURLWithPath: args[1])
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard let mp3 = snapshot.items.first(where: { $0.format == .mp3 }) else { fail("no MP3s") }
+        print("exists \(mp3.id): \(try await device.objectExists(mp3.id) ? "yes" : "no")")
+        print("exists 4000000000: \(try await device.objectExists(4_000_000_000) ? "yes" : "no")")
+        let file = dir.appendingPathComponent("item.mp3")
+        try await device.download(mp3.id, to: file) { _ in }
+        let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber
+        print("get \(mp3.id) '\(mp3.title)': \(size?.uint64Value ?? 0) bytes (expected \(mp3.fileSize))")
+        for album in snapshot.albums.prefix(3) {
+            if let data = try await device.albumArt(albumID: album.id) {
+                try data.write(to: dir.appendingPathComponent("art-\(album.id).jpg"))
+                print("art \(album.id) '\(album.name)': \(data.count) bytes")
+            } else {
+                print("art \(album.id) '\(album.name)': no art")
+            }
+        }
     case ("put", 2):
         _ = try await put(URL(fileURLWithPath: args[1]))
     case ("mkalbum", _) where args.count >= 4:
