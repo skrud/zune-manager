@@ -1,0 +1,77 @@
+diff --git a/src/libmtp.c b/src/libmtp.c
+index 3ee4ea7..03f927d 100644
+--- a/src/libmtp.c
++++ b/src/libmtp.c
+@@ -7321,6 +7321,33 @@ int LIBMTP_Track_Exists(LIBMTP_mtpdevice_t *device,
+   return 0;
+ }
+ 
++/**
++ * This asks the device itself whether an object exists, bypassing the
++ * object cache (unlike LIBMTP_Track_Exists(), which answers from the
++ * cache and so cannot confirm that a send or delete really happened).
++ * @param device a pointer to the device to query.
++ * @param id the object ID to look for.
++ * @return 1 if the object exists, 0 if the device reports an invalid
++ *         handle, -1 on any other error.
++ */
++int LIBMTP_Object_Exists_On_Device(LIBMTP_mtpdevice_t *device,
++           uint32_t const id)
++{
++  PTPParams *params = (PTPParams *) device->params;
++  PTPObjectInfo oi;
++  uint16_t ret;
++
++  memset(&oi, 0, sizeof(oi));
++  ret = ptp_getobjectinfo(params, id, &oi);
++  ptp_free_objectinfo(&oi);
++  if (ret == PTP_RC_OK)
++    return 1;
++  if (ret == PTP_RC_InvalidObjectHandle)
++    return 0;
++  add_ptp_error_to_errorstack(device, ret, "LIBMTP_Object_Exists_On_Device(): could not query object.");
++  return -1;
++}
++
+ /**
+  * This creates a new folder structure and allocates memory
+  * for it. Notice that if you add strings to this structure they
+diff --git a/src/libmtp.h.in b/src/libmtp.h.in
+index c1deaea..5e195dc 100644
+--- a/src/libmtp.h.in
++++ b/src/libmtp.h.in
+@@ -1007,6 +1007,7 @@ int LIBMTP_Send_Track_From_Handler(LIBMTP_mtpdevice_t *,
+ int LIBMTP_Update_Track_Metadata(LIBMTP_mtpdevice_t *,
+ 			LIBMTP_track_t const * const);
+ int LIBMTP_Track_Exists(LIBMTP_mtpdevice_t *, uint32_t const);
++int LIBMTP_Object_Exists_On_Device(LIBMTP_mtpdevice_t *, uint32_t const);
+ int LIBMTP_Set_Track_Name(LIBMTP_mtpdevice_t *, LIBMTP_track_t *, const char *);
+ /** @} */
+ 
+diff --git a/src/libmtp.sym b/src/libmtp.sym
+index c84c2c9..bd70a8f 100644
+--- a/src/libmtp.sym
++++ b/src/libmtp.sym
+@@ -78,6 +78,7 @@ LIBMTP_Send_Track_From_File_Descriptor
+ LIBMTP_Send_Track_From_Handler
+ LIBMTP_Update_Track_Metadata
+ LIBMTP_Track_Exists
++LIBMTP_Object_Exists_On_Device
+ LIBMTP_new_folder_t
+ LIBMTP_destroy_folder_t
+ LIBMTP_Get_Folder_List
+diff --git a/src/music-players.h b/src/music-players.h
+index 7664c0e..b5c0160 100644
+--- a/src/music-players.h
++++ b/src/music-players.h
+@@ -454,7 +454,9 @@
+   { "Microsoft", 0x045e, "Kin 1", 0x0640, DEVICE_FLAG_NONE },
+   { "Microsoft/Sharp/nVidia", 0x045e, "Kin TwoM", 0x0641, DEVICE_FLAG_NONE },
+   // Reported by Farooq Zaman (used for all Zunes)
+-  { "Microsoft", 0x045e, "Zune", 0x0710, DEVICE_FLAG_NONE },
++  // GetObjPropList for all objects stalls the device after the MTPZ handshake
++  { "Microsoft", 0x045e, "Zune", 0x0710,
++      DEVICE_FLAG_BROKEN_MTPGETOBJPROPLIST_ALL },
+   /* https://sourceforge.net/p/libmtp/feature-requests/155/ */
+   { "Microsoft", 0x045e, "Lumia 950 XL Dual SIM (RM-1116)", 0x0a00, DEVICE_FLAG_NONE },
+   // Reported by Olegs Jeremejevs
