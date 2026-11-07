@@ -179,6 +179,21 @@ import Testing
         #expect(await fake.calls.filter { $0.hasPrefix("art") } == ["art 100", "art 999"])
     }
 
+    @Test func prepareToQuitReleasesTheZune() async {
+        let fake = rushFake()
+        let store = await connected(fake)
+        await store.prepareToQuit()
+        #expect(await fake.calls.last == "disconnect")
+    }
+
+    @Test func prepareToQuitWhenStuckDoesNotWaitOnTheDevice() async {
+        let fake = rushFake()
+        await fake.configure { $0.stuckOn = ["connect"] }
+        let store = await connected(fake)
+        await store.prepareToQuit()
+        #expect(await !fake.calls.contains("disconnect"))
+    }
+
     @Test func detachClearsAndReattachReconnects() async {
         let fake = rushFake()
         let store = await connected(fake)

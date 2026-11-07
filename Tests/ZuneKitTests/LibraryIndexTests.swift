@@ -52,11 +52,60 @@ private func index(_ items: [MediaItem], albums: [AlbumObject] = []) -> LibraryI
         #expect(albums.first?.itemIDs.sorted() == [1, 2])
     }
 
-    @Test func itemsSortByTrackNumberUnknownLast() {
+    @Test func albumItemsSortByTrackNumberUnknownLast() {
         let idx = index([song(1, "Second", artist: "Rush", album: "2112", track: 2),
                          song(2, "Bonus", artist: "Rush", album: "2112", track: 0),
                          song(3, "First", artist: "Rush", album: "2112", track: 1)])
-        #expect(idx.items(artist: nil, album: nil, matching: "").map(\.title) == ["First", "Second", "Bonus"])
+        let album = AlbumKey(name: "2112", albumArtist: "Rush")
+        #expect(idx.items(artist: nil, album: album, matching: "").map(\.title) == ["First", "Second", "Bonus"])
+        #expect(idx.items(artist: "Rush", album: album, matching: "").map(\.title) == ["First", "Second", "Bonus"])
+        #expect(idx.resolve(.album(album)).map(\.title) == ["First", "Second", "Bonus"])
+    }
+
+    @Test func allItemsSortByArtistThenAlbumThenTrack() {
+        let idx = index([song(1, "Tears", artist: "Rush", album: "2112", track: 5),
+                         song(2, "4000 Torches", artist: "3 Inches of Blood", album: "LLHM", track: 7),
+                         song(3, "Tom Sawyer", artist: "Rush", album: "Moving Pictures", track: 1),
+                         song(4, "Lessons", artist: "Rush", album: "2112", track: 4)])
+        #expect(idx.items(artist: nil, album: nil, matching: "").map(\.title)
+                == ["4000 Torches", "Lessons", "Tears", "Tom Sawyer"])
+    }
+
+    @Test func songGroupsNestAlbumsUnderArtists() {
+        let idx = index([song(1, "Tears", artist: "Rush", album: "2112", track: 5),
+                         song(2, "4000 Torches", artist: "3 Inches of Blood", album: "LLHM", track: 7),
+                         song(3, "Tom Sawyer", artist: "Rush", album: "Moving Pictures", track: 1),
+                         song(4, "Lessons", artist: "Rush", album: "2112", track: 4)])
+        let groups = idx.songGroups(artist: nil, album: nil, matching: "")
+        #expect(groups.map(\.artist) == ["3 Inches of Blood", "Rush"])
+        #expect(groups[1].albums.map(\.album.name) == ["2112", "Moving Pictures"])
+        #expect(groups[1].albums[0].items.map(\.title) == ["Lessons", "Tears"])
+
+        let rush = idx.songGroups(artist: "Rush", album: nil, matching: "")
+        #expect(rush.map(\.artist) == ["Rush"])
+        #expect(rush[0].albums.map(\.album.name) == ["2112", "Moving Pictures"])
+
+        let one = idx.songGroups(artist: nil, album: AlbumKey(name: "2112", albumArtist: "Rush"), matching: "")
+        #expect(one.flatMap(\.albums).map(\.album.name) == ["2112"])
+        #expect(one.flatMap(\.albums).flatMap(\.items).map(\.title) == ["Lessons", "Tears"])
+    }
+
+    @Test func songGroupsFollowSearch() {
+        let idx = index([song(1, "Tears", artist: "Rush", album: "2112"),
+                         song(2, "4000 Torches", artist: "3 Inches of Blood", album: "LLHM")])
+        #expect(idx.songGroups(artist: nil, album: nil, matching: "tear").map(\.artist) == ["Rush"])
+    }
+
+    @Test func artistItemsSortByAlbumThenTrack() {
+        let idx = index([song(1, "Tom Sawyer", artist: "Rush", album: "Moving Pictures", track: 1),
+                         song(2, "Lessons", artist: "Rush", album: "2112", track: 4),
+                         song(3, "Limelight", artist: "Rush", album: "Moving Pictures", track: 3),
+                         song(4, "Overture", artist: "Rush", album: "2112", track: 1),
+                         song(5, "Red Barchetta", artist: "Rush", album: "Moving Pictures", track: 2)])
+        #expect(idx.items(artist: "Rush", album: nil, matching: "").map(\.title)
+                == ["Overture", "Lessons", "Tom Sawyer", "Red Barchetta", "Limelight"])
+        #expect(idx.resolve(.artist("Rush")).map(\.title)
+                == ["Overture", "Lessons", "Tom Sawyer", "Red Barchetta", "Limelight"])
     }
 
     @Test func searchIgnoresCaseAndDiacritics() {

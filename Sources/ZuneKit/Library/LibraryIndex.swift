@@ -96,7 +96,40 @@ public struct LibraryIndex: Sendable {
             (artist == nil || displayArtistByID[item.id] == artist)
                 && (album == nil || albumKeyByID[item.id] == album)
         }
-        return Self.sortedForDisplay(filtered)
+        return group(filtered, artist: artist, album: album).flatMap(\.albums).flatMap(\.items)
+    }
+
+    /// The Songs column's sections: songs under album headings, under artist headings.
+    /// With an album selected there's one group, in track order; with an artist selected,
+    /// one artist with its albums; otherwise every artist.
+    public func songGroups(artist: String?, album: AlbumKey?, matching query: String) -> [SongArtistGroup] {
+        let filtered = matchingItems(query).filter { item in
+            (artist == nil || displayArtistByID[item.id] == artist)
+                && (album == nil || albumKeyByID[item.id] == album)
+        }
+        return group(filtered, artist: artist, album: album)
+    }
+
+    private func group(_ items: [MediaItem], artist: String?, album: AlbumKey?) -> [SongArtistGroup] {
+        if let album {
+            guard !items.isEmpty else { return [] }
+            return [SongArtistGroup(artist: artist ?? album.albumArtist,
+                                    albums: [SongAlbumGroup(album: album, items: Self.inTrackOrder(items))])]
+        }
+        let byArtist = Dictionary(grouping: items) { displayArtistByID[$0.id] ?? Self.unknownArtist }
+        return byArtist.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.map { name in
+            let byAlbum = Dictionary(grouping: byArtist[name]!) {
+                albumKeyByID[$0.id] ?? AlbumKey(name: Self.unknownAlbum, albumArtist: name)
+            }
+            let keys = byAlbum.keys.sorted { a, b in
+                let byName = a.name.localizedStandardCompare(b.name)
+                if byName != .orderedSame { return byName == .orderedAscending }
+                return a.albumArtist.localizedStandardCompare(b.albumArtist) == .orderedAscending
+            }
+            return SongArtistGroup(artist: name, albums: keys.map {
+                SongAlbumGroup(album: $0, items: Self.inTrackOrder(byAlbum[$0]!))
+            })
+        }
     }
 
     public func item(_ id: UInt32) -> MediaItem? {
@@ -112,7 +145,7 @@ public struct LibraryIndex: Sendable {
         case .items(let ids):
             return ids.compactMap { itemsByID[$0] }
         case .album(let key):
-            return Self.sortedForDisplay((albumEntries[key]?.itemIDs ?? []).compactMap { itemsByID[$0] })
+            return Self.inTrackOrder((albumEntries[key]?.itemIDs ?? []).compactMap { itemsByID[$0] })
         case .artist(let name):
             return items(artist: name, album: nil, matching: "")
         }
@@ -127,17 +160,34 @@ public struct LibraryIndex: Sendable {
         }
     }
 
-    private static func sortedForDisplay(_ items: [MediaItem]) -> [MediaItem] {
-        items.sorted { a, b in
-            let ta = a.trackNumber == 0 ? Int.max : a.trackNumber
-            let tb = b.trackNumber == 0 ? Int.max : b.trackNumber
-            if ta != tb { return ta < tb }
-            return a.title.localizedStandardCompare(b.title) == .orderedAscending
-        }
+    private static func inTrackOrder(_ items: [MediaItem]) -> [MediaItem] {
+        items.sorted(by: trackOrder)
+    }
+
+    /// Track number (unknown last), then title.
+    private static func trackOrder(_ a: MediaItem, _ b: MediaItem) -> Bool {
+        let ta = a.trackNumber == 0 ? Int.max : a.trackNumber
+        let tb = b.trackNumber == 0 ? Int.max : b.trackNumber
+        if ta != tb { return ta < tb }
+        return a.title.localizedStandardCompare(b.title) == .orderedAscending
     }
 
     private static func fold(_ s: String) -> String {
         s.trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
     }
+}
+
+/// An artist heading in the Songs column, with its albums.
+public struct SongArtistGroup: Identifiable, Hashable, Sendable {
+    public var id: String { artist }
+    public var artist: String
+    public var albums: [SongAlbumGroup]
+}
+
+/// An album heading in the Songs column, with its songs in track order.
+public struct SongAlbumGroup: Identifiable, Hashable, Sendable {
+    public var id: AlbumKey { album }
+    public var album: AlbumKey
+    public var items: [MediaItem]
 }

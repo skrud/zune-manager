@@ -68,6 +68,14 @@ public final class ZuneStore {
         Task { await old?.disconnect() }
     }
 
+    /// Closes the MTP session so the Zune leaves its "syncing" screen. When the Zune is stuck,
+    /// the session can't be closed (the worker refuses), so this returns straight away.
+    public func prepareToQuit() async {
+        guard phase != .stuck, let client else { return }
+        self.client = nil
+        await client.disconnect()
+    }
+
     private func connect() async {
         generation += 1
         let gen = generation
