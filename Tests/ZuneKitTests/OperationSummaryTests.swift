@@ -8,7 +8,7 @@ import Testing
         #expect(s.headline == "3 done")
         s.skipped = ["D (already on the Zune)"]
         #expect(s.headline == "3 done, 1 skipped")
-        s.failed = ["E": "device said no"]
+        s.failed = [.init(name: "E", reason: "device said no")]
         s.notDone = ["F", "G"]
         #expect(s.headline == "3 done, 1 skipped, 1 failed, 2 not done")
     }
@@ -21,7 +21,7 @@ import Testing
         s.notDone = ["C"]
         #expect(s.needsAttention)
         s.notDone = []
-        s.failed = ["D": "x"]
+        s.failed = [.init(name: "D", reason: "x")]
         #expect(s.needsAttention)
     }
 }

@@ -47,7 +47,7 @@ struct SummaryDetails: View {
             VStack(alignment: .leading, spacing: 8) {
                 section("Done", summary.succeeded)
                 section("Skipped", summary.skipped)
-                section("Failed", summary.failed.keys.sorted().map { "\($0) — \(summary.failed[$0]!)" })
+                section("Failed", summary.failed.map { "\($0.name) — \($0.reason)" })
                 section("Not done", summary.notDone)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

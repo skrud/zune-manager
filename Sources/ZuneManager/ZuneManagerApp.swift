@@ -7,7 +7,8 @@ struct ZuneManagerApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
 
     var body: some Scene {
-        WindowGroup("Zune Manager") {
+        // One window: a second one would run its own add flow against the same Zune.
+        Window("Zune Manager", id: "main") {
             ContentView(store: delegate.store)
                 .frame(minWidth: 820, minHeight: 480)
         }
@@ -38,16 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
-    /// Closes the Zune's session before quitting (bounded, in case the Zune doesn't answer).
+    /// Never quits in the middle of a libmtp call (that wedges the Zune): finishes the current
+    /// file or the connect, then closes the Zune's session. Every step is bounded by the
+    /// device layer's time limits.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard store.phase != .stuck else { return .terminateNow }
         Task {
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask { await self.store.prepareToQuit() }
-                group.addTask { try? await Task.sleep(for: .seconds(5)) }
-                await group.next()
-                group.cancelAll()
-            }
+            await store.prepareToQuit()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

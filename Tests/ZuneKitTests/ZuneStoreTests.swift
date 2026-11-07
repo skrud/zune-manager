@@ -98,6 +98,17 @@ import Testing
         #expect(store.snapshot?.albums.isEmpty == true)
     }
 
+    @Test func cancelledDeleteStillRemovesAlbumsItEmptied() async throws {
+        let fake = rushFake()
+        let store = await connected(fake)
+        // Deleting all of Rush; cancel while the second 2112 song is being deleted.
+        await fake.configure { $0.onDelete = { id in if id == 2 { await MainActor.run { store.cancelAfterCurrentFile() } } } }
+        await store.delete(try #require(store.deletePlan(for: .artist("Rush"))))
+        #expect(store.lastSummary?.notDone == ["Tom Sawyer"])
+        #expect(await fake.calls.contains("delete 100"))
+        #expect(store.snapshot?.albums.isEmpty == true)
+    }
+
     @Test func deleteSongRemovesItFromItsAlbumObject() async throws {
         let store = await connected(rushFake())
         await store.delete(try #require(store.deletePlan(for: .items([1]))))
@@ -109,7 +120,7 @@ import Testing
         await fake.configure { $0.existsAfterDelete = true }
         let store = await connected(fake)
         await store.delete(try #require(store.deletePlan(for: .items([5]))))
-        #expect(store.lastSummary?.failed["Tom Sawyer"] == "Still on the Zune after deleting.")
+        #expect(store.lastSummary?.reason(for: "Tom Sawyer") == "Still on the Zune after deleting.")
         #expect(store.lastSummary?.succeeded == [])
         #expect(store.index?.item(5) != nil)
     }
@@ -121,9 +132,38 @@ import Testing
         await store.delete(try #require(store.deletePlan(for: .album(album2112))))
         #expect(store.phase == .waitingForDevice)
         #expect(store.snapshot == nil)
-        #expect(store.lastSummary?.failed["2112"] == "The Zune was unplugged before this could be confirmed.")
+        #expect(store.lastSummary?.reason(for: "2112") == "The Zune was unplugged before this could be confirmed.")
         #expect(store.lastSummary?.notDone == ["A Passage to Bangkok"])
         #expect(await !fake.calls.contains("delete 2"))
+    }
+
+    @Test func lateStuckErrorFromUnpluggedZuneIsIgnored() async throws {
+        let fake = rushFake()
+        let store = await connected(fake)
+        await fake.configure {
+            $0.onDelete = { _ in await MainActor.run { store.deviceDetached() } }
+            $0.deleteError = .deviceNotResponding(operation: "delete")
+        }
+        await store.delete(try #require(store.deletePlan(for: .items([5]))))
+        #expect(store.phase == .waitingForDevice)
+        #expect(store.activity == nil)
+        #expect(store.lastSummary?.failed.isEmpty == false)
+    }
+
+    @Test func detachClearsTheProgressBar() async throws {
+        let fake = rushFake()
+        let store = await connected(fake)
+        let sawActivityAfterDetach = Locked(true)
+        await fake.configure {
+            $0.onDelete = { _ in
+                await MainActor.run {
+                    store.deviceDetached()
+                    sawActivityAfterDetach.withLock { $0 = store.activity != nil }
+                }
+            }
+        }
+        await store.delete(try #require(store.deletePlan(for: .items([5]))))
+        #expect(!sawActivityAfterDetach.withLock { $0 })
     }
 
     @Test func stuckDuringDeleteGoesStuck() async throws {
@@ -159,7 +199,7 @@ import Testing
         let store = await connected(fake)
         let dir = tempDir()
         await store.export(.items([5]), to: dir)
-        #expect(store.lastSummary?.failed["Tom Sawyer"] == "The copy was incomplete.")
+        #expect(store.lastSummary?.reason(for: "Tom Sawyer") == "The copy was incomplete.")
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("Rush/Moving Pictures/01 Tom Sawyer.mp3").path))
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("Rush/Moving Pictures").path).isEmpty)
     }
@@ -237,6 +277,35 @@ import Testing
         let store = await connected(fake)
         await store.prepareToQuit()
         #expect(await fake.calls.last == "disconnect")
+    }
+
+    @Test func quittingMidSaveStopsAfterTheCurrentFileThenDisconnects() async throws {
+        let fake = rushFake()
+        let store = await connected(fake)
+        await fake.configure { $0.onDownload = { _ in try? await Task.sleep(for: .milliseconds(200)) } }
+        let save = Task { await store.export(.artist("Rush"), to: tempDir()) }
+        try await Task.sleep(for: .milliseconds(50))
+        await store.prepareToQuit()
+        await save.value
+        let calls = await fake.calls.filter { $0.hasPrefix("download") || $0 == "disconnect" }
+        #expect(calls.count == 2)
+        #expect(calls.last == "disconnect")
+        #expect(store.lastSummary?.notDone.count == 2)
+    }
+
+    @Test func quittingWhileConnectingWaitsForTheConnect() async throws {
+        let fake = rushFake()
+        let store = makeStore(fake)
+        let phaseAtDisconnect = Locked<ZuneStore.Phase?>(nil)
+        await fake.configure {
+            $0.onConnect = { try? await Task.sleep(for: .milliseconds(200)) }
+            $0.onDisconnect = { await MainActor.run { phaseAtDisconnect.withLock { $0 = store.phase } } }
+        }
+        let attach = Task { await store.deviceAttached() }
+        try await Task.sleep(for: .milliseconds(50))
+        await store.prepareToQuit()
+        await attach.value
+        #expect(phaseAtDisconnect.withLock { $0 } == .ready)
     }
 
     @Test func prepareToQuitWhenStuckDoesNotWaitOnTheDevice() async {

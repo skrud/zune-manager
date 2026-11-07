@@ -71,13 +71,21 @@ public final class ZuneStore {
         selectedArtist = nil
         selectedAlbum = nil
         selectedItemIDs = []
+        // The running operation (if any) stops at its next step and still reports.
+        activity = nil
         if phase != .stuck { phase = .waitingForDevice }
         Task { await old?.disconnect() }
     }
 
-    /// Closes the MTP session so the Zune leaves its "syncing" screen. When the Zune is stuck,
-    /// the session can't be closed (the worker refuses), so this returns straight away.
+    /// Gets ready to quit without leaving the Zune wedged: a running add, delete or save stops
+    /// after its current file, a connect in progress is allowed to finish (both are bounded by
+    /// the device layer's time limits), then the MTP session is closed so the Zune leaves its
+    /// "syncing" screen. When the Zune is stuck there's nothing to wait for or close.
     public func prepareToQuit() async {
+        if activity != nil { cancelAfterCurrentFile() }
+        while phase != .stuck, activity != nil || phase == .connecting {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         guard phase != .stuck, let client else { return }
         self.client = nil
         await client.disconnect()
@@ -129,7 +137,9 @@ public final class ZuneStore {
         }) else { return }
         var summary = run.summary
 
-        if run.completed {
+        // Also after a cancel: albums whose songs are all gone shouldn't linger (the check
+        // below skips any album that still has songs). Not after an unplug or a stuck Zune.
+        if run.generation == generation, phase == .ready {
             for albumID in plan.albumObjectsToDelete {
                 guard let album = snapshot?.albums.first(where: { $0.id == albumID }),
                       album.itemIDs.allSatisfy({ id in snapshot?.items.contains { $0.id == id } != true })
@@ -137,16 +147,17 @@ public final class ZuneStore {
                 do {
                     try await client.delete(albumID)
                     if try await client.objectExists(albumID) {
-                        summary.failed["\(album.name) (album)"] = "Still on the Zune after deleting."
+                        summary.failed.append(.init(name: "\(album.name) (album)", reason: "Still on the Zune after deleting."))
                     } else {
                         removeAlbum(albumID)
                     }
                 } catch {
+                    guard run.generation == generation else { break }
                     if Self.isStuck(error) {
                         phase = .stuck
                         break
                     }
-                    summary.failed["\(album.name) (album)"] = Self.message(error)
+                    summary.failed.append(.init(name: "\(album.name) (album)", reason: Self.message(error)))
                 }
             }
         }
@@ -188,8 +199,8 @@ public final class ZuneStore {
             if gen == generation { artCache[albumObjectID] = .some(data) }
             return data
         } catch {
-            if Self.isStuck(error) { phase = .stuck }
-            else if gen == generation { artCache[albumObjectID] = .some(nil) }
+            guard gen == generation else { return nil }
+            if Self.isStuck(error) { phase = .stuck } else { artCache[albumObjectID] = .some(nil) }
             return nil
         }
     }
@@ -238,27 +249,29 @@ public final class ZuneStore {
             do {
                 let result = try await step(element)
                 if gen != generation {
-                    summary.failed[names[i]] = Self.unpluggedMessage
+                    summary.failed.append(.init(name: names[i], reason: Self.unpluggedMessage))
                     summary.notDone += names[(i + 1)...]
                     return Run(summary: summary, completed: false, generation: gen)
                 }
                 switch result {
                 case .succeeded: summary.succeeded.append(names[i])
                 case .skipped(let reason): summary.skipped.append(reason)
-                case .failed(let reason): summary.failed[names[i]] = reason
+                case .failed(let reason): summary.failed.append(.init(name: names[i], reason: reason))
                 }
             } catch {
+                // A late error from a Zune that's since been unplugged says nothing about the
+                // current connection, so check that first.
+                if gen != generation {
+                    summary.failed.append(.init(name: names[i], reason: Self.unpluggedMessage))
+                    summary.notDone += names[(i + 1)...]
+                    return Run(summary: summary, completed: false, generation: gen)
+                }
                 if Self.isStuck(error) {
                     phase = .stuck
                     summary.notDone += names[i...]
                     return Run(summary: summary, completed: false, generation: gen)
                 }
-                if gen != generation {
-                    summary.failed[names[i]] = Self.unpluggedMessage
-                    summary.notDone += names[(i + 1)...]
-                    return Run(summary: summary, completed: false, generation: gen)
-                }
-                summary.failed[names[i]] = Self.message(error)
+                summary.failed.append(.init(name: names[i], reason: Self.message(error)))
             }
         }
         return Run(summary: summary, completed: true, generation: gen)
@@ -272,13 +285,14 @@ public final class ZuneStore {
                     let storage = try await client.refreshStorage()
                     if gen == generation { snapshot?.storage = storage }
                 } catch {
-                    if Self.isStuck(error) { phase = .stuck }
+                    if Self.isStuck(error), gen == generation { phase = .stuck }
                 }
             }
             rebuildIndex()
         }
         lastSummary = summary
-        activity = nil
+        // After an unplug the bar was already cleared, and a new connection's operation owns it.
+        if gen == generation { activity = nil }
     }
 
     func report(_ progress: TransferProgress) {

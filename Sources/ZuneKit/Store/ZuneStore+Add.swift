@@ -11,7 +11,8 @@ public struct AddPreparation: Hashable, Sendable {
 
 extension ZuneStore {
     public func prepareAdd(_ urls: [URL]) async -> AddPreparation {
-        let scan = FileScanner.scan(urls)
+        // Walking a big folder takes a while; keep it off the main thread so the window stays live.
+        let scan = await Task.detached(priority: .userInitiated) { FileScanner.scan(urls) }.value
         var songs: [LocalSong] = []
         var unreadable: [URL: String] = [:]
         for url in scan.mp3s {
@@ -33,7 +34,7 @@ extension ZuneStore {
 
     public func add(_ plan: AddPlan, preparation: AddPreparation) async {
         guard let client else { return }
-        var artFailures: [String: String] = [:]
+        var artFailures: [OperationSummary.Failure] = []
 
         guard let run = await perform("Add to Zune", plan.steps, name: \.song.title, { step in
             let song = step.song
@@ -56,12 +57,12 @@ extension ZuneStore {
                 case .create(let name, let artist):
                     let album = try await client.createAlbum(name: name, artist: artist, itemIDs: [item.id])
                     self.storeAlbum(album)
-                    if let art = Self.albumArt(for: song) {
+                    if let art = await Task.detached(priority: .userInitiated, operation: { Self.albumArt(for: song) }).value {
                         do {
                             try await client.setAlbumArt(albumID: album.id, art: art)
                         } catch {
                             if Self.isStuck(error) { throw error }
-                            artFailures["\(name) (art)"] = Self.message(error)
+                            artFailures.append(.init(name: "\(name) (art)", reason: Self.message(error)))
                         }
                     }
                 }
@@ -86,7 +87,7 @@ extension ZuneStore {
                 "\($0.lastPathComponent) (couldn't read it: \(preparation.unreadable[$0]!))"
             }
             + summary.skipped
-        summary.failed.merge(artFailures) { first, _ in first }
+        summary.failed += artFailures
         await finish(summary, generation: run.generation, refreshStorage: true)
     }
 
@@ -112,7 +113,7 @@ extension ZuneStore {
     }
 
     /// The song's embedded cover, else cover.jpg / folder.jpg next to it, ready for the Zune.
-    static func albumArt(for song: LocalSong) -> AlbumArt? {
+    nonisolated static func albumArt(for song: LocalSong) -> AlbumArt? {
         let data = song.embeddedArtwork
             ?? FileScanner.coverImage(forSongAt: song.url).flatMap { try? Data(contentsOf: $0) }
         return data.flatMap(Artwork.zuneAlbumArt(from:))

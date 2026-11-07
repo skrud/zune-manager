@@ -60,7 +60,7 @@ struct ColumnBrowserView: View {
                         Text(artist)
                             .font(.headline)
                             .padding(.top, 6)
-                    case .albumHeading(let album):
+                    case .albumHeading(let album, _):
                         Text(album.name)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)

@@ -145,9 +145,22 @@ import ZuneTestSupport
         await fake.configure { $0.failSendFor = ["Tears"] }
         let store = await connected(fake)
         _ = try await addAll(store)
-        #expect(store.lastSummary?.failed["Tears"] == "device said no")
+        #expect(store.lastSummary?.reason(for: "Tears") == "device said no")
         #expect(store.lastSummary?.succeeded == ["Lessons"])
         #expect(await fake.calls.contains("send Lessons"))
+    }
+
+    @Test func failuresWithTheSameTitleAreAllReported() async throws {
+        for album in ["2112", "Moving Pictures"] {
+            try MP3Fixture.write(to: dir.appendingPathComponent("Intro \(album).mp3"), title: "Intro",
+                                 artist: "Rush", album: album)
+        }
+        let fake = FakeZuneDevice(TestData.snapshot([]))
+        await fake.configure { $0.failSendFor = ["Intro"] }
+        let store = await connected(fake)
+        _ = try await addAll(store)
+        #expect(store.lastSummary?.failed.count == 2)
+        #expect(store.lastSummary?.headline.contains("2 failed") == true)
     }
 
     @Test func nonMP3FilesReportedAsSkipped() async throws {

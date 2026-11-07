@@ -24,9 +24,12 @@ actor FakeZuneDevice: ZuneDeviceClient {
     var downloadShortBy = 0
     var onDownload: (@Sendable (UInt32) async -> Void)?
     var onDelete: (@Sendable (UInt32) async -> Void)?
+    /// Thrown by delete after `onDelete` runs (e.g. a late error from an unplugged Zune).
+    var deleteError: ZuneError?
     /// Reported in order during connect, then `onConnect` runs before connect returns.
     var connectProgress: [ConnectProgress] = []
     var onConnect: (@Sendable () async -> Void)?
+    var onDisconnect: (@Sendable () async -> Void)?
 
     init(_ snapshot: DeviceSnapshot, art: [UInt32: Data] = [:]) {
         items = Dictionary(uniqueKeysWithValues: snapshot.items.map { ($0.id, $0) })
@@ -116,6 +119,7 @@ actor FakeZuneDevice: ZuneDeviceClient {
     func delete(_ id: UInt32) async throws {
         try record("delete \(id)", op: "delete")
         await onDelete?(id)
+        if let deleteError { throw deleteError }
         guard !existsAfterDelete else { return }
         if let item = items.removeValue(forKey: id) { storage.freeBytes += item.fileSize }
         albums.removeValue(forKey: id)
@@ -123,5 +127,6 @@ actor FakeZuneDevice: ZuneDeviceClient {
 
     func disconnect() async {
         calls.append("disconnect")
+        await onDisconnect?()
     }
 }

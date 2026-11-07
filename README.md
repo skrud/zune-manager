@@ -17,7 +17,14 @@ with MTPZ support (the Zune refuses file transfers without the MTPZ handshake).
     asking it for every object's metadata at once stalls it after the MTPZ handshake;
   - `LIBMTP_Object_Exists_On_Device()`, which asks the device directly whether an object
     exists (libmtp's `LIBMTP_Track_Exists()` answers from its cache, so it can't confirm
-    that a copy or delete really happened).
+    that a copy or delete really happened);
+  - in `libusb1-glue.c`, keeping the device's response code when it answers without a data
+    phase (the Zune does this for a missing object), so "no such object" isn't reported as
+    a transport error;
+  - `LIBMTP_Open_Raw_Device_With_Progress()`, for the loading bar.
+
+  `scripts/build-libmtp.sh` also forces iconv on (macOS's iconv fails a gnulib self-test,
+  and without iconv accented titles reach the Zune garbled).
 - The MTPZ key file at `~/.mtpz-data`.
 
 ## Build

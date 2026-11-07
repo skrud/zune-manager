@@ -12,6 +12,10 @@ grep -A1 '"Zune", 0x0710' "$FORK/src/music-players.h" | grep -q DEVICE_FLAG_BROK
   || die "the fork's Zune entry lacks DEVICE_FLAG_BROKEN_MTPGETOBJPROPLIST_ALL (see third_party/libmtp-zune.patch)"
 grep -q LIBMTP_Object_Exists_On_Device "$FORK/src/libmtp.h.in" \
   || die "the fork lacks LIBMTP_Object_Exists_On_Device (see third_party/libmtp-zune.patch)"
+grep -q 'PTP_USB_CONTAINER_RESPONSE &&' "$FORK/src/libusb1-glue.c" \
+  || die "the fork lacks the response-code fix in libusb1-glue.c; without it every delete/overwrite check fails (see third_party/libmtp-zune.patch)"
+grep -q LIBMTP_Open_Raw_Device_With_Progress "$FORK/src/libmtp.h.in" \
+  || die "the fork lacks LIBMTP_Open_Raw_Device_With_Progress (see third_party/libmtp-zune.patch)"
 
 for dep in libgcrypt libusb libtool gettext; do
   brew --prefix "$dep" >/dev/null 2>&1 \

@@ -3,13 +3,15 @@
 /// switching between differently nested Section structures.
 public enum SongRow: Identifiable, Hashable, Sendable {
     case artistHeading(String)
-    case albumHeading(AlbumKey)
+    /// `underArtist` is the artist heading it sits under (nil when there's none), so a
+    /// compilation's heading repeated under each of its artists still has a unique id.
+    case albumHeading(AlbumKey, underArtist: String?)
     case song(MediaItem, showTrack: Bool)
 
     public var id: String {
         switch self {
         case .artistHeading(let artist): "artist\u{1F}\(artist)"
-        case .albumHeading(let key): "album\u{1F}\(key.name)\u{1F}\(key.albumArtist)"
+        case .albumHeading(let key, let artist): "album\u{1F}\(artist ?? "")\u{1F}\(key.name)\u{1F}\(key.albumArtist)"
         case .song(let item, _): "song\u{1F}\(item.id)"
         }
     }
@@ -25,7 +27,7 @@ public enum SongRow: Identifiable, Hashable, Sendable {
         for group in groups {
             if artist == nil { rows.append(.artistHeading(group.artist)) }
             for albumGroup in group.albums {
-                rows.append(.albumHeading(albumGroup.album))
+                rows.append(.albumHeading(albumGroup.album, underArtist: artist == nil ? group.artist : nil))
                 rows += albumGroup.items.map { .song($0, showTrack: true) }
             }
         }

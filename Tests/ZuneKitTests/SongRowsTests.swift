@@ -13,7 +13,7 @@ import Testing
         rows.map {
             switch $0 {
             case .artistHeading(let a): "# \(a)"
-            case .albumHeading(let k): "## \(k.name)"
+            case .albumHeading(let k, _): "## \(k.name)"
             case .song(let s, let showTrack): showTrack ? "\(s.trackNumber). \(s.title)" : s.title
             }
         }
@@ -37,6 +37,17 @@ import Testing
         #expect(describe(SongRow.rows(index: index, artist: nil, album: album, matching: "")) == [
             "4. Lessons", "5. Tears",
         ])
+    }
+
+    @Test func compilationRowIDsAreUnique() {
+        // One album object, songs by two track artists: in "All" its heading appears under both.
+        let index = LibraryIndex(snapshot: TestData.snapshot(
+            [TestData.item(1, "One", artist: "A", album: "Hits", track: 1),
+             TestData.item(2, "Two", artist: "B", album: "Hits", track: 2)],
+            albums: [AlbumObject(id: 100, name: "Hits", artist: "Various Artists", itemIDs: [1, 2])]))
+        let rows = SongRow.rows(index: index, artist: nil, album: nil, matching: "")
+        #expect(describe(rows) == ["# A", "## Hits", "1. One", "# B", "## Hits", "2. Two"])
+        #expect(Set(rows.map(\.id)).count == rows.count)
     }
 
     @Test func rowIDsAreUniqueAndStable() {
