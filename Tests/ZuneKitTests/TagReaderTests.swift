@@ -52,6 +52,17 @@ import ZuneTestSupport
         #expect(s.artist == "Motörhead")
     }
 
+    /// The Zune can't draw combining accents, and macOS hands back file names decomposed
+    /// ("e" + U+0308), so everything read must come out precomposed ("ë" = U+00EB).
+    @Test func textIsPrecomposed() async throws {
+        let url = dir.appendingPathComponent("Te\u{0308}st.mp3")
+        try MP3Fixture.write(to: url, title: nil, artist: "Mo\u{0308}rhead", album: "U\u{0308}ber")
+        let s = try await TagReader.read(url)
+        #expect(Array(s.title.unicodeScalars) == Array("T\u{00EB}st".unicodeScalars))
+        #expect(Array(s.artist.unicodeScalars) == Array("M\u{00F6}rhead".unicodeScalars))
+        #expect(Array(s.album.unicodeScalars) == Array("\u{00DC}ber".unicodeScalars))
+    }
+
     @Test func effectiveAlbumArtistFallsBackToArtist() async throws {
         let url = dir.appendingPathComponent("e.mp3")
         try MP3Fixture.write(to: url, title: "T", artist: "Rush", album: "2112")

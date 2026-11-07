@@ -16,7 +16,7 @@ public enum MP3Fixture {
         ]
         for (id, value) in textFrames {
             guard let value else { continue }
-            frames.append(frame(id, Data([0x03]) + Data(value.utf8)))
+            frames.append(frame(id, encodedText(value)))
         }
         if let artworkJPEG {
             // Encoding ISO-8859-1, MIME type, picture type 3 (front cover), empty description.
@@ -36,6 +36,15 @@ public enum MP3Fixture {
         let audioFrame = header + Data(count: 413)
         for _ in 0..<Int(seconds * 44100 / 1152) { file.append(audioFrame) }
         try file.write(to: url)
+    }
+
+    /// ID3v2.3 allows only ISO-8859-1 (0x00) or UTF-16 with a BOM (0x01); UTF-8 is a v2.4
+    /// encoding that devices like the Zune don't understand.
+    private static func encodedText(_ value: String) -> Data {
+        if value.unicodeScalars.allSatisfy(\.isASCII) {
+            return Data([0x00]) + Data(value.utf8)
+        }
+        return Data([0x01, 0xFF, 0xFE]) + value.data(using: .utf16LittleEndian)!
     }
 
     private static func frame(_ id: String, _ body: Data) -> Data {

@@ -48,6 +48,23 @@ if command == "make-test-album", args.count == 2 {
     exit(0)
 }
 
+if command == "make-unicode-check", args.count == 2 {
+    // Two songs telling apart "the Zune reads titles from the file's tags" from "the Zune shows
+    // the title sent over MTP": one has a UTF-16 ID3 title, the other has no title tag at all
+    // (its title comes from the file name, sent over MTP only).
+    let dir = URL(fileURLWithPath: args[1])
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let art = ImageFixture.jpeg(width: 300, height: 300)
+    try MP3Fixture.write(to: dir.appendingPathComponent("01.mp3"), title: "Tëst ID3 Ünicode",
+                         artist: "Claude Test", album: "Claude Test Album 2", albumArtist: "Claude Test",
+                         track: "1", artworkJPEG: art, seconds: 10)
+    try MP3Fixture.write(to: dir.appendingPathComponent("Tëst MTP-only Ünicode.mp3"), title: nil,
+                         artist: "Claude Test", album: "Claude Test Album 2", albumArtist: "Claude Test",
+                         track: "2", artworkJPEG: art, seconds: 10)
+    print("wrote \(dir.path)")
+    exit(0)
+}
+
 let device = LiveZuneDevice()
 
 func put(_ file: URL) async throws -> (LocalSong, MediaItem) {

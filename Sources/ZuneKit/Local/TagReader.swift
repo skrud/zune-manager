@@ -16,7 +16,7 @@ public enum TagReader {
                 if artwork == nil { artwork = try await item.load(.dataValue) }
             } else if text[id] == nil, let value = try await item.load(.stringValue) {
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { text[id] = trimmed }
+                if !trimmed.isEmpty { text[id] = precomposed(trimmed) }
             }
         }
         func tag(_ identifier: AVMetadataIdentifier) -> String? { text[identifier.rawValue] }
@@ -25,7 +25,7 @@ public enum TagReader {
         let yearText = tag(.id3MetadataYear) ?? tag(.id3MetadataRecordingTime)
         return LocalSong(
             url: url,
-            title: tag(.id3MetadataTitleDescription) ?? url.deletingPathExtension().lastPathComponent,
+            title: tag(.id3MetadataTitleDescription) ?? precomposed(url.deletingPathExtension().lastPathComponent),
             artist: tag(.id3MetadataLeadPerformer) ?? LibraryIndex.unknownArtist,
             album: tag(.id3MetadataAlbumTitle) ?? LibraryIndex.unknownAlbum,
             albumArtist: tag(.id3MetadataBand),
@@ -36,6 +36,12 @@ public enum TagReader {
             fileSize: UInt64(size),
             embeddedArtwork: artwork
         )
+    }
+
+    /// The Zune can't draw combining accents (macOS file names come decomposed: "e" + U+0308),
+    /// so text is sent in its composed form ("ë").
+    private static func precomposed(_ s: String) -> String {
+        s.precomposedStringWithCanonicalMapping
     }
 
     /// "3/12" → 3, "07" → 7.

@@ -25,11 +25,17 @@ HB=$(brew --prefix)
 cd "$FORK"
 [ -x configure ] || ./autogen.sh
 make clean >/dev/null 2>&1 || true
-./configure --prefix="$PREFIX" CPPFLAGS="-I$HB/include" LDFLAGS="-L$HB/lib" >/dev/null
+# gnulib's "working iconv" test fails on macOS's iconv (over conversions libmtp never uses).
+# Without iconv, libmtp copies UTF-8 bytes one by one into the UTF-16 strings it sends, so
+# every accented character in a title arrives on the Zune as junk. macOS's iconv handles
+# libmtp's UTF-8 <-> UTF-16LE fine, so tell configure it works.
+./configure --prefix="$PREFIX" CPPFLAGS="-I$HB/include" LDFLAGS="-L$HB/lib" \
+  am_cv_func_iconv_works=yes >/dev/null
 make -j8 >/dev/null
 make install >/dev/null
 
 grep -q 'define USE_MTPZ' config.h || die "MTPZ support was not enabled (is libgcrypt installed?)"
+grep -q 'define HAVE_ICONV 1' config.h || die "iconv was not enabled; non-ASCII titles would be garbled"
 otool -L "$PREFIX/lib/libmtp.dylib" | grep -q gcrypt || die "installed libmtp is not linked against libgcrypt"
 nm -gU "$PREFIX/lib/libmtp.dylib" | grep -q _LIBMTP_Object_Exists_On_Device \
   || die "installed libmtp does not export LIBMTP_Object_Exists_On_Device"
