@@ -12,6 +12,20 @@ public struct OperationSummary: Hashable, Sendable {
     public init(title: String) {
         self.title = title
     }
+
+    /// "3 done, 1 skipped, 1 failed, 2 not done" — only the parts that happened.
+    public var headline: String {
+        var parts = ["\(succeeded.count) done"]
+        if !skipped.isEmpty { parts.append("\(skipped.count) skipped") }
+        if !failed.isEmpty { parts.append("\(failed.count) failed") }
+        if !notDone.isEmpty { parts.append("\(notDone.count) not done") }
+        return parts.joined(separator: ", ")
+    }
+
+    /// Something failed or was left undone, so the result shouldn't disappear by itself.
+    public var needsAttention: Bool {
+        !failed.isEmpty || !notDone.isEmpty
+    }
 }
 
 /// The operation in progress, for the progress bar.

@@ -12,34 +12,37 @@ struct ContentView: View {
     }
 
     var body: some View {
-        Group {
-            switch store.phase {
-            case .waitingForDevice:
-                StatusView(symbol: "cable.connector", title: "Connect your Zune",
-                           detail: "Plug it in with its USB cable. Close Chromium-based browsers (like Helium) first — they can interfere with the Zune.")
-            case .connecting:
-                ConnectingView(status: store.connectStatus)
-            case .stuck:
-                StatusView(symbol: "exclamationmark.triangle", title: "Your Zune stopped responding",
-                           detail: ZuneStore.stuckMessage) {
-                    Button("Quit Zune Manager") { NSApp.terminate(nil) }
-                        .keyboardShortcut(.defaultAction)
+        VStack(spacing: 0) {
+            Group {
+                switch store.phase {
+                case .waitingForDevice:
+                    StatusView(symbol: "cable.connector", title: "Connect your Zune",
+                               detail: "Plug it in with its USB cable. Close Chromium-based browsers (like Helium) first — they can interfere with the Zune.")
+                case .connecting:
+                    ConnectingView(status: store.connectStatus)
+                case .stuck:
+                    StatusView(symbol: "exclamationmark.triangle", title: "Your Zune stopped responding",
+                               detail: ZuneStore.stuckMessage) {
+                        Button("Quit Zune Manager") { NSApp.terminate(nil) }
+                            .keyboardShortcut(.defaultAction)
+                    }
+                case .failed(let message):
+                    StatusView(symbol: "exclamationmark.triangle", title: "Couldn't read your Zune", detail: message) {
+                        Button("Reconnect") { Task { await store.reconnect() } }
+                            .keyboardShortcut(.defaultAction)
+                    }
+                case .ready:
+                    browser
                 }
-            case .failed(let message):
-                StatusView(symbol: "exclamationmark.triangle", title: "Couldn't read your Zune", detail: message) {
-                    Button("Reconnect") { Task { await store.reconnect() } }
-                        .keyboardShortcut(.defaultAction)
-                }
-            case .ready:
-                browser
             }
-        }
-        // Summaries outlive the browser: an unplug mid-operation still reports what happened.
-        .sheet(isPresented: Binding(get: { store.lastSummary != nil }, set: { if !$0 { store.dismissSummary() } })) {
+            .frame(maxHeight: .infinity)
+            // Outside the phase switch: an unplug mid-operation still reports what happened.
             if let summary = store.lastSummary {
-                SummarySheet(summary: summary) { store.dismissSummary() }
+                Divider()
+                SummaryBar(summary: summary) { withAnimation { store.dismissSummary() } }
             }
         }
+        .animation(.default, value: store.lastSummary)
     }
 
     private var busy: Bool { store.activity != nil || addFlow.isPreparing }
